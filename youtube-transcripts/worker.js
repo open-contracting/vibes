@@ -303,21 +303,47 @@ function parseCaptionXml(xml) {
   const re = /<text[^>]*\bstart="([^"]+)"[^>]*>([\s\S]*?)<\/text>/g;
   let m;
   while ((m = re.exec(xml)) !== null) {
-    const text = decodeXmlEntities(m[2]).replace(/<[^>]+>/g, '').replace(/\n/g, ' ').trim();
+    const text = decodeXmlEntities(stripTags(m[2])).replace(/\n/g, ' ').trim();
     if (text) out.push({ start: parseFloat(m[1]), text });
   }
   return out;
 }
 
+// Strip HTML/XML-like tags. Applied iteratively until stable so that nested
+// patterns like "<scr<script>ipt>" don't leak a tag through a single pass.
+function stripTags(s) {
+  let prev;
+  do {
+    prev = s;
+    s = s.replace(/<[^>]*>/g, '');
+  } while (s !== prev);
+  return s;
+}
+
+// Decode XML entities in a single pass so that "&amp;lt;" stays as "&lt;"
+// (rather than being re-decoded into "<"). Chained .replace() calls would
+// double-unescape, which CodeQL correctly flags.
+const NAMED_ENTITIES = {
+  amp: '&',
+  lt: '<',
+  gt: '>',
+  quot: '"',
+  apos: "'",
+};
+
 function decodeXmlEntities(s) {
-  return s
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(parseInt(n, 10)))
-    .replace(/&#x([0-9a-fA-F]+);/g, (_, n) => String.fromCharCode(parseInt(n, 16)));
+  return s.replace(/&(#x[0-9a-fA-F]+|#[0-9]+|[a-zA-Z]+);/g, (match, body) => {
+    if (body[0] === '#') {
+      const code = body[1] === 'x' || body[1] === 'X'
+        ? parseInt(body.slice(2), 16)
+        : parseInt(body.slice(1), 10);
+      if (Number.isFinite(code) && code >= 0 && code <= 0x10FFFF) {
+        try { return String.fromCodePoint(code); } catch (e) { return match; }
+      }
+      return match;
+    }
+    return NAMED_ENTITIES[body] !== undefined ? NAMED_ENTITIES[body] : match;
+  });
 }
 
 async function safeFetch(targetUrl, options) {
