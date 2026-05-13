@@ -71,36 +71,126 @@ export default {
     const url = new URL(request.url);
 
     if (url.pathname === '/' || url.pathname === '/index.html') {
-      return serveHTML(request);
+      return serveHTML(request, env);
     }
     if (url.pathname === '/api/transcript') {
-      return handleTranscript(url.searchParams.get('v'), request);
+      return handleTranscript(url.searchParams.get('v'), request, env);
     }
     if (url.pathname === '/api/playlist') {
-      return handlePlaylist(url.searchParams.get('list'), request);
+      return handlePlaylist(url.searchParams.get('list'), request, env);
+    }
+    if (url.pathname === '/api/credits') {
+      return handleCredits(env);
     }
     return new Response('Not found', { status: 404 });
   },
 };
 
+// Proxy to Supadata's /me endpoint. Returns null fields if no API key is configured
+// (development mode), letting the UI hide the credits display.
+async function handleCredits(env) {
+  if (!env || !env.SUPADATA_API_KEY) {
+    return json({ provider: 'innertube' });
+  }
+  try {
+    const res = await fetch('https://api.supadata.ai/v1/me', {
+      headers: { 'x-api-key': env.SUPADATA_API_KEY },
+    });
+    if (!res.ok) {
+      return json({ provider: 'supadata', error: `HTTP ${res.status}` });
+    }
+    const data = await res.json();
+    return json({
+      provider: 'supadata',
+      plan: data.plan,
+      used: data.usedCredits,
+      max: data.maxCredits,
+    });
+  } catch (e) {
+    return json({ provider: 'supadata', error: e.message });
+  }
+}
+
+// Pick the provider based on whether the Supadata API key is configured.
+// - Production (deployed Worker with secret set): Supadata, which has residential
+//   IPs that YouTube doesn't bot-block.
+// - Local development (no secret set): direct InnerTube calls, which work from
+//   home IPs and cost nothing.
+function getProvider(env) {
+  if (env && env.SUPADATA_API_KEY) {
+    return {
+      name: 'supadata',
+      fetchTranscriptForVideo: (id) => supadataTranscript(id, env.SUPADATA_API_KEY),
+      getPlaylistVideos: (id) => supadataPlaylist(id, env.SUPADATA_API_KEY),
+    };
+  }
+  return {
+    name: 'innertube',
+    fetchTranscriptForVideo: innertubeTranscript,
+    getPlaylistVideos: innertubePlaylist,
+  };
+}
+
+// --- KV cache wrapper ---
+// Cache key conventions:
+//   transcript:<videoId>      — never expires (transcripts are immutable)
+//   playlist:<playlistId>     — 24h TTL (playlists change as videos are added)
+//
+// If env.CACHE is not bound (e.g. local dev without KV namespace), this is
+// a transparent no-op: every request goes straight to the provider.
+
+async function cachedOrFetch(env, key, ttlSeconds, fetchFn) {
+  const kv = env && env.CACHE;
+  if (kv) {
+    try {
+      const hit = await kv.get(key, 'json');
+      if (hit) {
+        console.log(`[cache] HIT ${key}`);
+        return { data: hit, cached: true };
+      }
+      console.log(`[cache] MISS ${key}`);
+    } catch (e) {
+      console.log(`[cache] read failed for ${key}: ${e.message}`);
+    }
+  }
+
+  const data = await fetchFn();
+
+  if (kv) {
+    // Write asynchronously — don't make the user wait for the cache write.
+    const writeOptions = ttlSeconds ? { expirationTtl: ttlSeconds } : {};
+    kv.put(key, JSON.stringify(data), writeOptions).catch((e) => {
+      console.log(`[cache] write failed for ${key}: ${e.message}`);
+    });
+  }
+
+  return { data, cached: false };
+}
+
 // --- API: single video transcript ---
 
-async function handleTranscript(videoId, request) {
+async function handleTranscript(videoId, request, env) {
   if (!videoId || !/^[a-zA-Z0-9_-]{11}$/.test(videoId)) {
     return json({ error: 'Invalid or missing video ID' }, 400);
   }
+  const provider = getProvider(env);
   const user = request.headers.get('Cf-Access-Authenticated-User-Email');
-  if (user) console.log(`Transcript: ${videoId} by ${user}`);
+  if (user) console.log(`Transcript [${provider.name}]: ${videoId} by ${user}`);
 
   try {
-    const result = await fetchTranscriptForVideo(videoId);
-    return json(result);
+    const { data, cached } = await cachedOrFetch(
+      env,
+      `transcript:${videoId}`,
+      null,  // no TTL — transcripts are immutable
+      () => provider.fetchTranscriptForVideo(videoId)
+    );
+    return json({ ...data, cached });
   } catch (e) {
     return json({ error: e.message }, 500);
   }
 }
 
-async function fetchTranscriptForVideo(videoId) {
+async function innertubeTranscript(videoId) {
   const playerData = await callInnerTube('/youtubei/v1/player', { videoId });
 
   const tracks = playerData?.captions?.playerCaptionsTracklistRenderer?.captionTracks || [];
@@ -130,31 +220,50 @@ async function fetchTranscriptForVideo(videoId) {
 
 // --- API: playlist ---
 
-async function handlePlaylist(playlistId, request) {
+async function handlePlaylist(playlistId, request, env) {
   if (!playlistId || !/^[a-zA-Z0-9_-]{10,}$/.test(playlistId)) {
     return json({ error: 'Invalid or missing playlist ID' }, 400);
   }
+  const provider = getProvider(env);
   const user = request.headers.get('Cf-Access-Authenticated-User-Email');
-  if (user) console.log(`Playlist: ${playlistId} by ${user}`);
+  if (user) console.log(`Playlist [${provider.name}]: ${playlistId} by ${user}`);
 
   try {
-    const { title: playlistTitle, videos } = await getPlaylistVideos(playlistId);
+    // Cache the playlist enumeration for 24h — playlists change as videos are added/removed.
+    const { data: playlistData, cached: playlistCached } = await cachedOrFetch(
+      env,
+      `playlist:${playlistId}`,
+      86400,  // 24h TTL
+      () => provider.getPlaylistVideos(playlistId)
+    );
+    const { title: playlistTitle, videos } = playlistData;
+
     if (!videos.length) {
       return json({ error: 'Playlist is empty or unavailable' }, 404);
     }
 
-    // Cloudflare Workers free tier allows 50 subrequests per request.
-    // Playlist enumeration uses 1 subrequest per page (WEB client).
-    // Each video uses 2 subrequests typical (one player + one caption),
-    // or up to 8 worst case (4 client retries × 2). Real-world budget lands
-    // between these. Conservative threshold: warn over 15.
-    const truncated = videos.length > 15;
-    const toProcess = videos;  // Don't truncate; let the user see what happened
+    // Subrequest budget concerns differ by provider:
+    // - InnerTube: Workers free tier allows 50 subrequests. Each video uses 2-8.
+    //   Conservative threshold: ~15.
+    // - Supadata: 1 outbound subrequest per video, no client-retry chains.
+    //   Workers limit allows ~45 videos; Supadata's free tier is the harder cap.
+    // Caching reduces real cost: only fresh videos hit the provider.
+    const limit = provider.name === 'supadata' ? 45 : 15;
+    const truncated = videos.length > limit;
+    const toProcess = videos;
 
+    let cacheHits = 0;
     const results = await parallelMap(toProcess, PLAYLIST_CONCURRENCY, async (video) => {
       try {
-        const t = await fetchTranscriptForVideo(video.videoId);
-        return { ok: true, ...t };
+        const { data, cached } = await cachedOrFetch(
+          env,
+          `transcript:${video.videoId}`,
+          null,
+          () => provider.fetchTranscriptForVideo(video.videoId)
+        );
+        if (cached) cacheHits++;
+        // Preserve playlist title if the provider didn't return one
+        return { ok: true, ...data, title: data.title || video.title };
       } catch (e) {
         return {
           ok: false,
@@ -165,12 +274,16 @@ async function handlePlaylist(playlistId, request) {
       }
     });
 
+    console.log(`Playlist ${playlistId}: ${cacheHits}/${results.length} from cache (playlist enum: ${playlistCached ? 'cached' : 'fresh'})`);
+
     return json({
       playlistId,
       playlistTitle,
       count: results.length,
       truncated,
       videos: results,
+      provider: provider.name,
+      cacheHits,
     });
   } catch (e) {
     return json({ error: e.message }, 500);
@@ -193,7 +306,7 @@ async function parallelMap(items, concurrency, fn) {
   return results;
 }
 
-async function getPlaylistVideos(playlistId) {
+async function innertubePlaylist(playlistId) {
   // Use the WEB client specifically for playlist enumeration. WEB returns more
   // videos per page than ANDROID and its response shape is more predictable.
   // Playlists aren't rate-limit-sensitive the way player calls are.
@@ -235,6 +348,72 @@ async function getPlaylistVideos(playlistId) {
   }
 
   return { title, videos: allVideos };
+}
+
+// --- Provider: Supadata ---
+// Used in production where Cloudflare Worker IPs get LOGIN_REQUIRED from YouTube.
+// Supadata fetches from residential IPs and returns clean JSON.
+// Pricing: 1 credit per transcript, 100 free per month, paid plans scale up.
+// https://docs.supadata.ai
+
+const SUPADATA_BASE = 'https://api.supadata.ai/v1';
+
+async function supadataRequest(path, apiKey) {
+  const res = await fetch(SUPADATA_BASE + path, {
+    headers: { 'x-api-key': apiKey },
+  });
+  if (!res.ok) {
+    let detail = '';
+    try { detail = ': ' + (await res.text()).slice(0, 200); } catch (e) {}
+    throw new Error(`Supadata ${path} returned ${res.status}${detail}`);
+  }
+  return res.json();
+}
+
+async function supadataTranscript(videoId, apiKey) {
+  console.log(`[supadata] transcript ${videoId}`);
+  // Request structured (timestamped) segments rather than plain text by setting text=false.
+  // Also fetch video metadata in parallel so we get a proper title.
+  const [transcript, video] = await Promise.all([
+    supadataRequest(`/youtube/transcript?videoId=${videoId}&text=false`, apiKey),
+    supadataRequest(`/youtube/video?id=${videoId}`, apiKey).catch(() => null),
+  ]);
+
+  // Supadata uses `offset` (ms) and `duration` (ms); convert to our `start` (seconds).
+  const segments = (transcript.content || []).map((s) => ({
+    start: (s.offset || 0) / 1000,
+    text: (s.text || '').replace(/\n/g, ' ').trim(),
+  })).filter((s) => s.text);
+
+  if (!segments.length) throw new Error('Supadata returned an empty transcript');
+
+  return {
+    videoId,
+    title: video?.title || videoId,
+    author: video?.channel?.name || '',
+    language: transcript.lang || 'unknown',
+    kind: 'unknown',  // Supadata doesn't distinguish auto vs manual
+    segments,
+  };
+}
+
+async function supadataPlaylist(playlistId, apiKey) {
+  console.log(`[supadata] playlist ${playlistId}`);
+  // Get metadata (title) and the video IDs in parallel.
+  const [meta, vids] = await Promise.all([
+    supadataRequest(`/youtube/playlist?id=${playlistId}`, apiKey).catch(() => null),
+    supadataRequest(`/youtube/playlist/videos?id=${playlistId}&limit=100`, apiKey),
+  ]);
+
+  const ids = vids?.videoIds || vids?.video_ids || [];
+  // Supadata's playlist/videos endpoint returns IDs only — titles fill in later
+  // when each transcript is fetched (each transcript call returns the video title).
+  const videos = ids.map((id) => ({ videoId: id, title: id }));
+
+  return {
+    title: meta?.title || playlistId,
+    videos,
+  };
 }
 
 // Recursively walk any JSON value and return every value found at a property named `keyName`.
@@ -427,9 +606,13 @@ function json(body, status = 200) {
 
 // --- UI ---
 
-function serveHTML(request) {
+function serveHTML(request, env) {
   const user = request.headers.get('Cf-Access-Authenticated-User-Email') || '';
-  return new Response(HTML.replace('__USER_EMAIL__', escapeHtml(user)), {
+  const provider = getProvider(env).name;
+  const html = HTML
+    .replace('__USER_EMAIL__', escapeHtml(user))
+    .replace('__PROVIDER__', escapeHtml(provider));
+  return new Response(html, {
     headers: { 'Content-Type': 'text/html; charset=utf-8' },
   });
 }
@@ -466,6 +649,10 @@ const HTML = `<!DOCTYPE html>
   header { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 0.5rem; }
   h1 { font-size: 22px; font-weight: 500; margin: 0; }
   .user { font-size: 12px; color: var(--text-muted); font-family: ui-monospace, monospace; }
+  .header-meta { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; }
+  .credits { font-size: 11px; color: var(--text-muted); font-family: ui-monospace, monospace; }
+  .credits.low { color: var(--danger); }
+  .credits:empty { display: none; }
   p.lede { color: var(--text-muted); font-size: 14px; margin: 0 0 1.5rem; }
   p.lede .lede-note { display: block; font-size: 12px; margin-top: 4px; }
   .row { display: flex; gap: 8px; margin-bottom: 1rem; }
@@ -571,11 +758,14 @@ const HTML = `<!DOCTYPE html>
 <body>
   <header>
     <h1>YouTube transcript fetcher</h1>
-    <span class="user">__USER_EMAIL__</span>
+    <div class="header-meta">
+      <span class="credits" id="credits"></span>
+      <span class="user">__USER_EMAIL__</span>
+    </div>
   </header>
   <p class="lede">
     Paste a YouTube video URL, playlist URL, video ID, or playlist ID.
-    <span class="lede-note">Playlists up to ~15 videos work reliably on Cloudflare's free tier; larger needs the paid plan.</span>
+    <span class="lede-note" id="ledeNote" data-provider="__PROVIDER__"></span>
   </p>
 
   <div class="row">
@@ -621,6 +811,37 @@ const HTML = `<!DOCTYPE html>
 
 <script>
 (function(){
+  // Provider-specific guidance shown below the input box
+  const ledeNote = document.getElementById('ledeNote');
+  const provider = ledeNote.dataset.provider;
+  if (provider === 'supadata') {
+    ledeNote.textContent = 'Production mode: fetching via Supadata. Playlists up to ~45 videos per request; 100 transcripts/month free tier.';
+  } else {
+    ledeNote.textContent = 'Development mode: fetching YouTube directly. Playlists up to ~15 videos on free tier (may fail on Cloudflare IPs).';
+  }
+
+  // Credits display in the header — only meaningful when running against Supadata
+  const creditsEl = document.getElementById('credits');
+  async function refreshCredits() {
+    try {
+      const res = await fetch('/api/credits');
+      const data = await res.json();
+      if (data.provider !== 'supadata' || data.error) {
+        creditsEl.textContent = '';
+        return;
+      }
+      const remaining = data.max - data.used;
+      creditsEl.textContent = data.used + '/' + data.max + ' credits';
+      creditsEl.title = remaining + ' remaining on ' + (data.plan || 'current') + ' plan';
+      // Visually warn when we're under 10% of monthly allowance
+      if (remaining < data.max * 0.1) creditsEl.classList.add('low');
+      else creditsEl.classList.remove('low');
+    } catch (e) {
+      creditsEl.textContent = '';
+    }
+  }
+  refreshCredits();
+
   const urlInput = document.getElementById('url');
   const fetchBtn = document.getElementById('fetchBtn');
   const status = document.getElementById('status');
@@ -734,7 +955,8 @@ const HTML = `<!DOCTYPE html>
     singleView.classList.remove('hidden');
     playlistView.classList.add('hidden');
     renderSingle();
-    meta.textContent = data.videoId + ' \u00b7 ' + data.language + ' (' + data.kind + ')';
+    const cacheLabel = data.cached ? ' \u00b7 \u26A1 cached' : '';
+    meta.textContent = data.videoId + ' \u00b7 ' + data.language + ' (' + data.kind + ')' + cacheLabel;
   }
 
   // --- Playlist render ---
@@ -782,8 +1004,12 @@ const HTML = `<!DOCTYPE html>
     const failed = data.videos.length - ok;
     let sub = ok + ' of ' + data.videos.length + ' videos have captions'
       + (failed > 0 ? ' \u00b7 ' + failed + ' missing' : '');
+    if (typeof data.cacheHits === 'number' && data.cacheHits > 0) {
+      sub += ' \u00b7 \u26A1 ' + data.cacheHits + ' from cache';
+    }
     if (data.truncated) {
-      sub += ' \u00b7 \u26A0 ' + data.videos.length + ' videos exceeds free-tier limit (~15); later videos may have failed';
+      const cap = data.provider === 'supadata' ? '~45' : '~15';
+      sub += ' \u00b7 \u26A0 ' + data.videos.length + ' videos exceeds limit (' + cap + '); later videos may have failed';
     }
     playlistSub.textContent = sub;
 
@@ -923,6 +1149,8 @@ const HTML = `<!DOCTYPE html>
       setStatus(e.message, 'error');
     } finally {
       fetchBtn.disabled = false;
+      // Refresh credits — a fetch may have consumed some
+      refreshCredits();
     }
   });
 
