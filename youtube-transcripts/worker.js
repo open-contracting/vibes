@@ -74,10 +74,10 @@ export default {
       return serveHTML(request, env);
     }
     if (url.pathname === '/api/transcript') {
-      return handleTranscript(url.searchParams.get('v'), request, env);
+      return handleTranscript(url.searchParams.get('v'), request, env, ctx);
     }
     if (url.pathname === '/api/playlist') {
-      return handlePlaylist(url.searchParams.get('list'), request, env);
+      return handlePlaylist(url.searchParams.get('list'), request, env, ctx);
     }
     if (url.pathname === '/api/credits') {
       return handleCredits(env);
@@ -140,7 +140,7 @@ function getProvider(env) {
 // If env.CACHE is not bound (e.g. local dev without KV namespace), this is
 // a transparent no-op: every request goes straight to the provider.
 
-async function cachedOrFetch(env, key, ttlSeconds, fetchFn) {
+async function cachedOrFetch(env, ctx, key, ttlSeconds, fetchFn) {
   const kv = env && env.CACHE;
   if (kv) {
     try {
@@ -157,12 +157,16 @@ async function cachedOrFetch(env, key, ttlSeconds, fetchFn) {
 
   const data = await fetchFn();
 
-  if (kv) {
-    // Write asynchronously — don't make the user wait for the cache write.
+  if (kv && ctx) {
+    // Register the write with waitUntil so the Worker doesn't terminate
+    // before the put completes. Without this, the write often gets cancelled
+    // after the response is sent and the cache stays empty.
     const writeOptions = ttlSeconds ? { expirationTtl: ttlSeconds } : {};
-    kv.put(key, JSON.stringify(data), writeOptions).catch((e) => {
-      console.log(`[cache] write failed for ${key}: ${e.message}`);
-    });
+    ctx.waitUntil(
+      kv.put(key, JSON.stringify(data), writeOptions)
+        .then(() => console.log(`[cache] wrote ${key}`))
+        .catch((e) => console.log(`[cache] write failed for ${key}: ${e.message}`))
+    );
   }
 
   return { data, cached: false };
@@ -170,7 +174,7 @@ async function cachedOrFetch(env, key, ttlSeconds, fetchFn) {
 
 // --- API: single video transcript ---
 
-async function handleTranscript(videoId, request, env) {
+async function handleTranscript(videoId, request, env, ctx) {
   if (!videoId || !/^[a-zA-Z0-9_-]{11}$/.test(videoId)) {
     return json({ error: 'Invalid or missing video ID' }, 400);
   }
@@ -181,6 +185,7 @@ async function handleTranscript(videoId, request, env) {
   try {
     const { data, cached } = await cachedOrFetch(
       env,
+      ctx,
       `transcript:${videoId}`,
       null,  // no TTL — transcripts are immutable
       () => provider.fetchTranscriptForVideo(videoId)
@@ -221,7 +226,7 @@ async function innertubeTranscript(videoId) {
 
 // --- API: playlist ---
 
-async function handlePlaylist(playlistId, request, env) {
+async function handlePlaylist(playlistId, request, env, ctx) {
   if (!playlistId || !/^[a-zA-Z0-9_-]{10,}$/.test(playlistId)) {
     return json({ error: 'Invalid or missing playlist ID' }, 400);
   }
@@ -233,6 +238,7 @@ async function handlePlaylist(playlistId, request, env) {
     // Cache the playlist enumeration for 24h — playlists change as videos are added/removed.
     const { data: playlistData, cached: playlistCached } = await cachedOrFetch(
       env,
+      ctx,
       `playlist:${playlistId}`,
       86400,  // 24h TTL
       () => provider.getPlaylistVideos(playlistId)
@@ -264,6 +270,7 @@ async function handlePlaylist(playlistId, request, env) {
       try {
         const { data, cached } = await cachedOrFetch(
           env,
+          ctx,
           `transcript:${video.videoId}`,
           null,
           () => provider.fetchTranscriptForVideo(video.videoId)
