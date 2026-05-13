@@ -93,6 +93,7 @@ async function handleCredits(env) {
     return json({ provider: 'innertube' });
   }
   try {
+    await paceSupadata();  // Share the rate-limit gate with transcript calls
     const res = await fetch('https://api.supadata.ai/v1/me', {
       headers: { 'x-api-key': env.SUPADATA_API_KEY },
     });
