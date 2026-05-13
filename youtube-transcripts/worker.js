@@ -19,17 +19,42 @@ const ALLOWED_HOSTS = new Set([
   'm.youtube.com',
 ]);
 
-// InnerTube clients to try, in order. ANDROID first because it has lax rate-limiting
-// and avoids PoToken requirements that increasingly affect the WEB client.
-// API keys are hardcoded into YouTube's official apps — they're not secrets, but YouTube
-// could rotate them. If transcripts mysteriously start failing, refresh these from a fresh
-// watch-page scrape: curl https://www.youtube.com/watch?v=dQw4w9WgXcQ | grep -o 'INNERTUBE_API_KEY":"[^"]*'
+// InnerTube clients to try, in order. Order matters: we put clients that tolerate
+// anonymous datacenter IPs (like Cloudflare Worker egress) first.
+// - TVHTML5_SIMPLY_EMBEDDED_PLAYER: designed for TV apps that fetch unauthenticated.
+//   Most reliable for bypassing LOGIN_REQUIRED from datacenter IPs.
+// - IOS: signed differently from WEB/ANDROID; sometimes succeeds when others fail.
+// - ANDROID: traditionally laxest rate-limiting, but increasingly hit by bot detection.
+// - WEB: last resort. Most likely to demand PoToken on datacenter IPs.
+//
+// API keys are hardcoded into the official YouTube apps — they're not secrets, but
+// YouTube could rotate them. Refresh via:
+//   curl -A 'Mozilla/5.0' https://www.youtube.com/watch?v=dQw4w9WgXcQ | grep -o 'INNERTUBE_API_KEY":"[^"]*'
 const INNERTUBE_CLIENTS = [
+  {
+    name: 'TVHTML5_EMBED',
+    apiKey: 'AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8',
+    context: {
+      client: {
+        clientName: 'TVHTML5_SIMPLY_EMBEDDED_PLAYER',
+        clientVersion: '2.0',
+        clientScreen: 'EMBED',
+      },
+      thirdParty: { embedUrl: 'https://www.youtube.com/' },
+    },
+    userAgent: 'Mozilla/5.0 (PlayStation; PlayStation 4/12.00) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0',
+  },
+  {
+    name: 'IOS',
+    apiKey: 'AIzaSyB-63vPrdThhKuerbB2N_l7Kwwcxj6yUAc',
+    context: { client: { clientName: 'IOS', clientVersion: '20.10.4', deviceModel: 'iPhone16,2' } },
+    userAgent: 'com.google.ios.youtube/20.10.4 (iPhone16,2; U; CPU iOS 18_3_2 like Mac OS X;)',
+  },
   {
     name: 'ANDROID',
     apiKey: 'AIzaSyA8eiZmM1FaDVjRy-df2KTyQ_vz_yYM39w',
-    context: { client: { clientName: 'ANDROID', clientVersion: '20.10.38' } },
-    userAgent: 'com.google.android.youtube/20.10.38 (Linux; U; Android 13) gzip',
+    context: { client: { clientName: 'ANDROID', clientVersion: '20.10.38', androidSdkVersion: 30 } },
+    userAgent: 'com.google.android.youtube/20.10.38 (Linux; U; Android 11) gzip',
   },
   {
     name: 'WEB',
@@ -119,12 +144,11 @@ async function handlePlaylist(playlistId, request) {
     }
 
     // Cloudflare Workers free tier allows 50 subrequests per request.
-    // Playlist enumeration uses 1 subrequest per page (WEB client, up to ~100 videos per page).
-    // Each video then uses 2 subrequests in the best case (ANDROID player + caption fetch),
-    // or up to 4 in the worst case if we retry with WEB.
-    // Typical budget: 1 + 2×N. Worst case: 1 + 4×N.
-    // Conservative threshold: warn over 20 videos.
-    const truncated = videos.length > 20;
+    // Playlist enumeration uses 1 subrequest per page (WEB client).
+    // Each video uses 2 subrequests typical (one player + one caption),
+    // or up to 8 worst case (4 client retries × 2). Real-world budget lands
+    // between these. Conservative threshold: warn over 15.
+    const truncated = videos.length > 15;
     const toProcess = videos;  // Don't truncate; let the user see what happened
 
     const results = await parallelMap(toProcess, PLAYLIST_CONCURRENCY, async (video) => {
@@ -551,7 +575,7 @@ const HTML = `<!DOCTYPE html>
   </header>
   <p class="lede">
     Paste a YouTube video URL, playlist URL, video ID, or playlist ID.
-    <span class="lede-note">Playlists up to ~20 videos work reliably on Cloudflare's free tier; larger needs the paid plan.</span>
+    <span class="lede-note">Playlists up to ~15 videos work reliably on Cloudflare's free tier; larger needs the paid plan.</span>
   </p>
 
   <div class="row">
@@ -759,7 +783,7 @@ const HTML = `<!DOCTYPE html>
     let sub = ok + ' of ' + data.videos.length + ' videos have captions'
       + (failed > 0 ? ' \u00b7 ' + failed + ' missing' : '');
     if (data.truncated) {
-      sub += ' \u00b7 \u26A0 ' + data.videos.length + ' videos exceeds free-tier limit (~20); later videos may have failed';
+      sub += ' \u00b7 \u26A0 ' + data.videos.length + ' videos exceeds free-tier limit (~15); later videos may have failed';
     }
     playlistSub.textContent = sub;
 
