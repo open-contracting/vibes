@@ -252,8 +252,14 @@ async function handlePlaylist(playlistId, request, env) {
     const truncated = videos.length > limit;
     const toProcess = videos;
 
+    // Concurrency depends on the provider:
+    // - Supadata free tier rate-limits concurrent requests, so process one at a time.
+    // - InnerTube has no such constraint; parallel is much faster.
+    // For both, the cache short-circuits already-fetched videos at near-zero cost.
+    const concurrency = provider.name === 'supadata' ? 1 : PLAYLIST_CONCURRENCY;
+
     let cacheHits = 0;
-    const results = await parallelMap(toProcess, PLAYLIST_CONCURRENCY, async (video) => {
+    const results = await parallelMap(toProcess, concurrency, async (video) => {
       try {
         const { data, cached } = await cachedOrFetch(
           env,
@@ -354,30 +360,83 @@ async function innertubePlaylist(playlistId) {
 // Used in production where Cloudflare Worker IPs get LOGIN_REQUIRED from YouTube.
 // Supadata fetches from residential IPs and returns clean JSON.
 // Pricing: 1 credit per transcript, 100 free per month, paid plans scale up.
+// Free tier has a strict rate limit (~1 req/sec); all Supadata calls go through
+// sequential paths only, with retry-on-429 below.
 // https://docs.supadata.ai
 
 const SUPADATA_BASE = 'https://api.supadata.ai/v1';
 
-async function supadataRequest(path, apiKey) {
-  const res = await fetch(SUPADATA_BASE + path, {
-    headers: { 'x-api-key': apiKey },
-  });
-  if (!res.ok) {
-    let detail = '';
-    try { detail = ': ' + (await res.text()).slice(0, 200); } catch (e) {}
+// Sleep helper for backoff delays
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// Free tier has a strict rate limit of 1 request per second. We enforce this
+// deterministically by tracking when the next call is allowed to fire and
+// reserving slots atomically before awaiting. This is module-scoped, so within
+// a single Worker isolate (which handles one request at a time per async task
+// but can serve many concurrent requests via await interleaving), all Supadata
+// calls are properly paced relative to each other. Across separate isolates
+// (e.g. users in different regions) pacing is best-effort — the retry-on-429
+// below catches any leakage.
+let supadataNextCallAt = 0;
+const SUPADATA_MIN_INTERVAL_MS = 1100;  // 1s limit + 100ms safety margin
+
+async function paceSupadata() {
+  // Reserve our slot BEFORE awaiting. By computing and writing supadataNextCallAt
+  // synchronously, two concurrent callers in the same isolate will see different
+  // reserved times: the first reserves now+1.1s, the second sees that and reserves
+  // now+2.2s, etc. Each then awaits until its own reserved time.
+  const now = Date.now();
+  const fireAt = Math.max(now, supadataNextCallAt);
+  supadataNextCallAt = fireAt + SUPADATA_MIN_INTERVAL_MS;
+
+  const waitMs = fireAt - now;
+  if (waitMs > 0) {
+    console.log(`[supadata] pacing: waiting ${waitMs}ms`);
+    await sleep(waitMs);
+  }
+}
+
+async function supadataRequest(path, apiKey, retries = 3) {
+  let lastErr;
+  for (let attempt = 0; attempt < retries; attempt++) {
+    await paceSupadata();
+
+    const res = await fetch(SUPADATA_BASE + path, {
+      headers: { 'x-api-key': apiKey },
+    });
+
+    if (res.ok) return res.json();
+
+    // Capture body for diagnosis
+    let body = '';
+    try { body = await res.text(); } catch (e) {}
+    const detail = body ? ': ' + body.slice(0, 200) : '';
+
+    // Retry on 429 (rate limit slipped through) and 5xx (transient). Don't retry on other 4xx.
+    if (res.status === 429 || res.status >= 500) {
+      const wait = 1000 * Math.pow(2, attempt) + Math.random() * 250;  // 1s, 2s, 4s + jitter
+      console.log(`[supadata] ${path} returned ${res.status}, retrying in ${Math.round(wait)}ms (attempt ${attempt + 1}/${retries})`);
+      lastErr = new Error(`Supadata ${path} returned ${res.status}${detail}`);
+      await sleep(wait);
+      continue;
+    }
+
     throw new Error(`Supadata ${path} returned ${res.status}${detail}`);
   }
-  return res.json();
+  throw lastErr;
 }
 
 async function supadataTranscript(videoId, apiKey) {
   console.log(`[supadata] transcript ${videoId}`);
-  // Request structured (timestamped) segments rather than plain text by setting text=false.
-  // Also fetch video metadata in parallel so we get a proper title.
-  const [transcript, video] = await Promise.all([
-    supadataRequest(`/youtube/transcript?videoId=${videoId}&text=false`, apiKey),
-    supadataRequest(`/youtube/video?id=${videoId}`, apiKey).catch(() => null),
-  ]);
+  // Sequential calls — free tier rate-limits concurrent requests.
+  const transcript = await supadataRequest(`/youtube/transcript?videoId=${videoId}&text=false`, apiKey);
+  // Metadata is best-effort; if it fails (e.g. rate limit), we still return the transcript.
+  let video = null;
+  try {
+    video = await supadataRequest(`/youtube/video?id=${videoId}`, apiKey);
+  } catch (e) {
+    console.log(`[supadata] metadata fetch failed for ${videoId}: ${e.message}`);
+  }
 
   // Supadata uses `offset` (ms) and `duration` (ms); convert to our `start` (seconds).
   const segments = (transcript.content || []).map((s) => ({
@@ -399,15 +458,17 @@ async function supadataTranscript(videoId, apiKey) {
 
 async function supadataPlaylist(playlistId, apiKey) {
   console.log(`[supadata] playlist ${playlistId}`);
-  // Get metadata (title) and the video IDs in parallel.
-  const [meta, vids] = await Promise.all([
-    supadataRequest(`/youtube/playlist?id=${playlistId}`, apiKey).catch(() => null),
-    supadataRequest(`/youtube/playlist/videos?id=${playlistId}&limit=100`, apiKey),
-  ]);
+  // Sequential — same rate-limit constraint as transcripts.
+  // Fetch the playlist title first, then enumerate video IDs.
+  let meta = null;
+  try {
+    meta = await supadataRequest(`/youtube/playlist?id=${playlistId}`, apiKey);
+  } catch (e) {
+    console.log(`[supadata] playlist metadata failed: ${e.message}`);
+  }
 
+  const vids = await supadataRequest(`/youtube/playlist/videos?id=${playlistId}&limit=100`, apiKey);
   const ids = vids?.videoIds || vids?.video_ids || [];
-  // Supadata's playlist/videos endpoint returns IDs only — titles fill in later
-  // when each transcript is fetched (each transcript call returns the video title).
   const videos = ids.map((id) => ({ videoId: id, title: id }));
 
   return {
@@ -815,7 +876,7 @@ const HTML = `<!DOCTYPE html>
   const ledeNote = document.getElementById('ledeNote');
   const provider = ledeNote.dataset.provider;
   if (provider === 'supadata') {
-    ledeNote.textContent = 'Production mode: fetching via Supadata. Playlists up to ~45 videos per request; 100 transcripts/month free tier.';
+    ledeNote.textContent = 'Production mode: fetching via Supadata. Free-tier rate limit is 1 transcript per second, so a 20-video playlist takes ~20s. Cached videos return instantly.';
   } else {
     ledeNote.textContent = 'Development mode: fetching YouTube directly. Playlists up to ~15 videos on free tier (may fail on Cloudflare IPs).';
   }
@@ -831,8 +892,8 @@ const HTML = `<!DOCTYPE html>
         return;
       }
       const remaining = data.max - data.used;
-      creditsEl.textContent = data.used + '/' + data.max + ' credits';
-      creditsEl.title = remaining + ' remaining on ' + (data.plan || 'current') + ' plan';
+      creditsEl.textContent = remaining + ' of ' + data.max + ' credits left';
+      creditsEl.title = data.used + ' used this month on ' + (data.plan || 'current') + ' plan';
       // Visually warn when we're under 10% of monthly allowance
       if (remaining < data.max * 0.1) creditsEl.classList.add('low');
       else creditsEl.classList.remove('low');
@@ -1133,7 +1194,13 @@ const HTML = `<!DOCTYPE html>
         showSingle(data);
         setStatus('Loaded ' + data.segments.length + ' segments.', 'success');
       } else {
-        setStatus('Fetching playlist (parallel, this is fast)...');
+        // The provider mode is already in scope from the dataset attribute; reuse it
+        // to set an honest expectation about timing.
+        if (provider === 'supadata') {
+          setStatus('Fetching playlist (1 transcript per second on free tier)...');
+        } else {
+          setStatus('Fetching playlist (parallel, this is fast)...');
+        }
         const t0 = Date.now();
         const res = await fetch('/api/playlist?list=' + encodeURIComponent(parsed.id));
         const data = await res.json();
