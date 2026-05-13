@@ -237,6 +237,9 @@ function findAll(node, keyName) {
 // Single attempt with a specific client. Throws on failure.
 async function callInnerTubeWithClient(client, path, payload) {
   const url = 'https://www.youtube.com' + path + '?key=' + client.apiKey + '&prettyPrint=false';
+  const requestId = (payload.videoId || payload.browseId || 'continuation').toString().slice(0, 20);
+  console.log(`[${client.name}] ${path} → ${requestId}`);
+
   const res = await safeFetch(url, {
     method: 'POST',
     headers: {
@@ -247,11 +250,29 @@ async function callInnerTubeWithClient(client, path, payload) {
     },
     body: JSON.stringify({ context: client.context, ...payload }),
   });
-  if (!res.ok) throw new Error(`${client.name}: HTTP ${res.status}`);
+
+  if (!res.ok) {
+    // Log a short snippet of body for diagnosis (often HTML error page from YouTube edge)
+    const snippet = (await res.text()).slice(0, 200).replace(/\s+/g, ' ');
+    console.log(`[${client.name}] HTTP ${res.status}: ${snippet}`);
+    throw new Error(`${client.name}: HTTP ${res.status}`);
+  }
+
   const data = await res.json();
+
+  // Did we even get the field we expect?
+  const hasCaptions = !!data?.captions?.playerCaptionsTracklistRenderer?.captionTracks;
+  const trackCount = data?.captions?.playerCaptionsTracklistRenderer?.captionTracks?.length || 0;
   const playabilityStatus = data?.playabilityStatus?.status;
+  const reason = data?.playabilityStatus?.reason;
+  const videoTitle = data?.videoDetails?.title;
+
+  if (path.includes('/player')) {
+    console.log(`[${client.name}] ${requestId} status=${playabilityStatus} title="${videoTitle?.slice(0, 40)}" captions=${hasCaptions} tracks=${trackCount}`);
+  }
+
   if (playabilityStatus && playabilityStatus !== 'OK') {
-    throw new Error(`${client.name}: ${data.playabilityStatus.reason || playabilityStatus}`);
+    throw new Error(`${client.name}: ${reason || playabilityStatus}`);
   }
   return data;
 }
@@ -274,9 +295,13 @@ async function fetchCaptions(captionUrl) {
   const res = await safeFetch(captionUrl, {
     headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
   });
-  if (!res.ok) throw new Error(`Caption fetch returned ${res.status}`);
+  if (!res.ok) {
+    console.log(`[captions] HTTP ${res.status} from ${new URL(captionUrl).pathname}`);
+    throw new Error(`Caption fetch returned ${res.status}`);
+  }
   const body = await res.text();
   const trimmed = body.trimStart();
+  console.log(`[captions] ${body.length} bytes, starts with "${trimmed.slice(0, 20)}"`);
 
   // JSON3 path (preferred)
   if (trimmed.startsWith('{')) {
@@ -287,12 +312,15 @@ async function fetchCaptions(captionUrl) {
       const text = ev.segs.map(s => s.utf8 || '').join('').replace(/\n/g, ' ').trim();
       if (text) out.push({ start: (ev.tStartMs || 0) / 1000, text });
     }
+    console.log(`[captions] parsed ${out.length} JSON segments`);
     return out;
   }
 
   // XML fallback (srv1/srv3) — older format YouTube still returns sometimes
   if (trimmed.startsWith('<')) {
-    return parseCaptionXml(trimmed);
+    const out = parseCaptionXml(trimmed);
+    console.log(`[captions] parsed ${out.length} XML segments`);
+    return out;
   }
 
   throw new Error('Caption response was neither JSON nor XML');
