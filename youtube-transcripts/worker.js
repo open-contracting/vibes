@@ -884,7 +884,7 @@ const HTML = `<!DOCTYPE html>
   const ledeNote = document.getElementById('ledeNote');
   const provider = ledeNote.dataset.provider;
   if (provider === 'supadata') {
-    ledeNote.textContent = 'Production mode: fetching via Supadata. Free-tier rate limit is 1 transcript per second, so a 20-video playlist takes ~20s. Cached videos return instantly.';
+    ledeNote.textContent = 'Production mode: fetching via Supadata. Free-tier rate limit is 1 transcript per second. Cached videos return instantly.';
   } else {
     ledeNote.textContent = 'Development mode: fetching YouTube directly. Playlists up to ~15 videos on free tier (may fail on Cloudflare IPs).';
   }
