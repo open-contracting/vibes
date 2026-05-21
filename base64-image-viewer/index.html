@@ -1,0 +1,234 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Base64 Image Viewer</title>
+<style>
+  :root {
+    --fg: #111;
+    --muted: #666;
+    --border: #ddd;
+    --bg: #fafafa;
+    --panel: #fff;
+    --accent: #2563eb;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    color: var(--fg);
+    background: var(--bg);
+    line-height: 1.5;
+  }
+  main {
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 24px 16px 48px;
+  }
+  h1 {
+    font-size: 1.4rem;
+    margin: 0 0 4px;
+  }
+  p.lede {
+    color: var(--muted);
+    margin: 0 0 20px;
+  }
+  textarea {
+    width: 100%;
+    min-height: 140px;
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.85rem;
+    resize: vertical;
+    background: var(--panel);
+  }
+  textarea:focus {
+    outline: 2px solid var(--accent);
+    outline-offset: -1px;
+    border-color: transparent;
+  }
+  .controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 16px;
+    align-items: center;
+    margin: 14px 0;
+  }
+  .bg-options {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+  }
+  .bg-options span {
+    color: var(--muted);
+    font-size: 0.9rem;
+  }
+  .bg-options label {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--panel);
+    cursor: pointer;
+    font-size: 0.9rem;
+  }
+  .bg-options input[type="radio"] {
+    margin: 0;
+  }
+  .bg-options input[type="radio"]:checked + span {
+    color: var(--fg);
+    font-weight: 600;
+  }
+  button {
+    padding: 6px 12px;
+    border: 1px solid var(--border);
+    background: var(--panel);
+    border-radius: 6px;
+    cursor: pointer;
+    font: inherit;
+  }
+  button:hover {
+    background: #f0f0f0;
+  }
+  .preview {
+    margin-top: 16px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    min-height: 200px;
+    padding: 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: auto;
+  }
+  .preview[data-bg="checker"] {
+    background-image:
+      linear-gradient(45deg, #ccc 25%, transparent 25%),
+      linear-gradient(-45deg, #ccc 25%, transparent 25%),
+      linear-gradient(45deg, transparent 75%, #ccc 75%),
+      linear-gradient(-45deg, transparent 75%, #ccc 75%);
+    background-size: 20px 20px;
+    background-position: 0 0, 0 10px, 10px -10px, 10px 0;
+    background-color: #fff;
+  }
+  .preview[data-bg="white"] { background: #fff; }
+  .preview[data-bg="black"] { background: #000; }
+  .preview img {
+    max-width: 100%;
+    height: auto;
+    display: block;
+  }
+  .placeholder {
+    color: var(--muted);
+    font-size: 0.9rem;
+  }
+  .error {
+    color: #b91c1c;
+    font-size: 0.9rem;
+  }
+  .meta {
+    margin-top: 10px;
+    color: var(--muted);
+    font-size: 0.85rem;
+  }
+</style>
+</head>
+<body>
+<main>
+  <h1>Base64 Image Viewer</h1>
+  <p class="lede">Paste a base64-encoded image (with or without the <code>data:</code> prefix).</p>
+
+  <textarea id="input" placeholder="iVBORw0KGgoAAAANSUhEUgAA... or data:image/png;base64,iVBOR..." autofocus></textarea>
+
+  <div class="controls">
+    <div class="bg-options" role="radiogroup" aria-label="Background">
+      <span>Background:</span>
+      <label><input type="radio" name="bg" value="checker" checked><span>Checker</span></label>
+      <label><input type="radio" name="bg" value="white"><span>White</span></label>
+      <label><input type="radio" name="bg" value="black"><span>Black</span></label>
+    </div>
+    <button type="button" id="clear">Clear</button>
+  </div>
+
+  <div class="preview" id="preview" data-bg="checker">
+    <span class="placeholder">Preview will appear here.</span>
+  </div>
+  <div class="meta" id="meta"></div>
+</main>
+
+<script>
+  const input = document.getElementById('input');
+  const preview = document.getElementById('preview');
+  const meta = document.getElementById('meta');
+  const clearBtn = document.getElementById('clear');
+  const bgRadios = document.querySelectorAll('input[name="bg"]');
+
+  function detectMime(b64) {
+    // Cheap signature sniffing on the first decoded bytes.
+    try {
+      const head = atob(b64.slice(0, 24));
+      if (head.startsWith('\x89PNG')) return 'image/png';
+      if (head.startsWith('\xFF\xD8\xFF')) return 'image/jpeg';
+      if (head.startsWith('GIF87a') || head.startsWith('GIF89a')) return 'image/gif';
+      if (head.startsWith('RIFF') && head.slice(8, 12) === 'WEBP') return 'image/webp';
+      if (head.startsWith('<svg') || head.startsWith('<?xml')) return 'image/svg+xml';
+      if (head.startsWith('BM')) return 'image/bmp';
+    } catch (_) {}
+    return 'image/png';
+  }
+
+  function render() {
+    const raw = input.value.trim();
+    preview.innerHTML = '';
+    meta.textContent = '';
+
+    if (!raw) {
+      const span = document.createElement('span');
+      span.className = 'placeholder';
+      span.textContent = 'Preview will appear here.';
+      preview.appendChild(span);
+      return;
+    }
+
+    let src;
+    if (raw.startsWith('data:')) {
+      src = raw;
+    } else {
+      const cleaned = raw.replace(/\s+/g, '');
+      const mime = detectMime(cleaned);
+      src = `data:${mime};base64,${cleaned}`;
+    }
+
+    const img = new Image();
+    img.onload = () => {
+      meta.textContent = `${img.naturalWidth} × ${img.naturalHeight} px`;
+    };
+    img.onerror = () => {
+      preview.innerHTML = '';
+      const span = document.createElement('span');
+      span.className = 'error';
+      span.textContent = 'Could not decode this as an image.';
+      preview.appendChild(span);
+      meta.textContent = '';
+    };
+    img.src = src;
+    preview.appendChild(img);
+  }
+
+  input.addEventListener('input', render);
+  bgRadios.forEach(r => r.addEventListener('change', e => {
+    preview.dataset.bg = e.target.value;
+  }));
+  clearBtn.addEventListener('click', () => {
+    input.value = '';
+    render();
+    input.focus();
+  });
+</script>
+</body>
+</html>
