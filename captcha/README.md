@@ -12,7 +12,7 @@ source .venv/bin/activate
 uv pip install -r requirements.txt
 ```
 
-After that, every script in this directory just uses `#!/usr/bin/env python` and picks up the activated venv. All ops go through `./manage.py`; the library API is `predict.py`.
+All ops go through `./manage.py`; the library API is `predict.py`.
 
 ## Quickstart
 
@@ -61,7 +61,11 @@ The captcha is case-sensitive, so the alphabet is 62 classes (`0-9 a-z A-Z`). Se
 
 ## Refining the model
 
-The training data has some labeling noise (mostly subtle case calls — K/k, S/s — and i/1/I/J confusions). The model accuracy is currently labeling-noise-bound. To push higher, either add more samples or clean more labels.
+Beyond the current accuracy, the remaining errors are roughly split between:
+
+- **Intrinsic visual ambiguity** — pairs that look identical at this resolution (K/k, S/s, V/v, 1/L, J/j). The model gets these wrong in both directions about evenly. Not fixable without different inputs.
+- **Segmentation edge cases** — captchas where cleaning loses or fragments a letter, producing a misaligned crop. The model then predicts something wild (`d→N`, `8→h`, etc.). Fixable in code but with diminishing returns.
+- **Systematic labelling biases** — pairs you've labelled inconsistently. These show up as *asymmetric* confusion pairs in xval (e.g. only `n→h` errors, never `h→n`). Catchable with `verify` below.
 
 ### Add more samples
 
@@ -104,7 +108,7 @@ captcha_0679.png  pos=2  label='B'  pred='3'  conf=0.996
 ...
 ```
 
-`pos` is the 0-indexed character position. At high confidence (`conf >= 0.85`), the model is right ~85-90% of the time in our experience. Lower confidence is more mixed.
+`pos` in `suspects.txt` is 0-indexed (the raw file format). The interactive `review` and `verify` commands display position as 1-indexed for readability. At high confidence (`conf >= 0.85`), the model is right ~85-90% of the time in our experience. Lower confidence is more mixed.
 
 Tuning knobs: `--folds 5 --epochs 40` (defaults). Training within each fold typically plateaus by epoch ~30 — reducing `--epochs 30` saves ~25% of runtime with negligible accuracy loss.
 
@@ -116,9 +120,14 @@ Already have a `suspects.txt` from a previous run and just want to re-print the 
 
 ### Find systematic mislabels (verify)
 
-xval has a blind spot: if you mislabeled the same character the same way in many captchas, the model learns the wrong mapping. On the held-out fold it predicts what you taught it — agreeing with the wrong label — so the mistake never shows up as a suspect. This is most likely on visually-ambiguous pairs like `n/h`, `p/b`, `K/k`, `S/s`, `V/v`, `J/j`, `1/I/L`.
+xval has a blind spot: if you mislabeled the same character the same way in many captchas, the model learns the wrong mapping. On the held-out fold it predicts what you taught it — agreeing with the wrong label — so the mistake never shows up as a suspect. The signal is **asymmetric** pairs in xval's report: a pair that confuses *only one direction* (e.g. `n → h : 6 (one-directional)` with no `h → n` cases) suggests `n` is being labelled where the truth is `h`.
 
-`./manage.py verify <chars>` iterates over every position in `labels.json` whose label is one of the given characters, regardless of what the model thinks, and lets you confirm or correct each:
+Rule of thumb from our experience:
+- **Asymmetric ≥4 cases** — worth verifying. The n→h case here yielded 3 real corrections out of 6 suspects.
+- **Asymmetric 1-3 cases** — usually noise, not a systematic bias. The K→k case here yielded zero real corrections.
+- **Bidirectional pairs** (e.g. `1 ↔ L : 6 (3 each direction)`) — intrinsic visual ambiguity, not labelling. Verifying these won't help.
+
+`./manage.py verify <chars>` walks every position in `labels.json` whose label is one of the given characters and prompts you to confirm or correct it:
 
 ```sh
 ./manage.py verify nh        # all n and h positions
@@ -126,13 +135,11 @@ xval has a blind spot: if you mislabeled the same character the same way in many
 ./manage.py verify pbnh      # multiple pairs in one pass
 ```
 
-The signal to act on this comes from the asymmetric pairs in `xval`'s pair report. If you see `n → h : 6 (one-directional)` with no balancing `h → n` cases, that asymmetry hints at a systematic labeling bias — and `verify nh` will surface the captchas you're labeling inconsistently with the model's learned norm.
-
-Like `review`, corrections are written to `labels.json` with a `.verify.bak` backup.
+The CLI groups positions by character with a gate prompt between sections (so your eye doesn't have to switch contexts mid-stream): press Enter to keep, type a different character to replace, Ctrl-C to save and quit. Corrections are written to `labels.json` with a `.verify.bak` backup.
 
 ### Apply xval corrections
 
-Three ways (`verify` above is a fourth, complementary approach):
+Three ways to resolve the xval suspects (alongside `verify` for systematic mislabels above):
 
 **Interactive CLI** (`./manage.py review`) — recommended for careful review. Shows each suspect captcha inline in the terminal with a red box around the suspect character. Press `Enter` (or `1`) to keep your label, `2` to accept the prediction, `e` to enter a different character, `q` to save and quit. Corrections are written to `labels.json` at the end with a `.cli.bak` backup of the previous file.
 
@@ -225,7 +232,7 @@ In roughly the order you'd touch them in the data → train → refine workflow:
 | File | Purpose |
 |---|---|
 | `requirements.txt` | Python deps. Install with `uv pip install -r requirements.txt` into the local `.venv`. |
-| `manage.py` | The CLI plus all model + image-processing code. Subcommands: `fetch`, `labelsheet`, `train`, `xval`, `review`, `predict`, `debug`. |
+| `manage.py` | The CLI plus all model + image-processing code. Subcommands: `fetch`, `labelsheet`, `train`, `xval`, `review`, `verify`, `predict`, `debug`. |
 | `predict.py` | Public Python API for callers: `predict(image)`, `predict_with_confidence(image)`. |
 
 Data files:
@@ -242,8 +249,8 @@ Data files:
 
 If you want to push beyond the current per-char accuracy:
 
-1. **More cleanup iterations of `manage.py xval`** — diminishing returns past iteration 2 in our experience.
-2. **More data** — pushes past the labeling-noise ceiling. Aim for 1500-2000 labeled.
+1. **Iterate `xval` + `review`/`verify`** — applying corrections, retraining, and re-running. Diminishing returns past 2-3 iterations in our experience.
+2. **More data** — past ~1000 labelled samples the labels-noise ceiling dominates, so more data only helps once labels are clean. Aim for 1500-2000 if you've exhausted cleanup.
 3. **Inspect failure modes** — look at the cross-val disagreements that *aren't* obviously mislabels. Those are systematic model weaknesses that need a code change, not a label fix. The per-component slot centering in `char_x_ranges` came from exactly this: a "suspect" turned out to be a correctly-labeled captcha whose crop was misaligned by uniform slicing, chopping a wide letter so it visually read as a different character. Look for: characters that the model gets wrong consistently across many captchas, ones where `min(conf)` in `predict_with_confidence` is low on otherwise-clear images, and ones where `./manage.py debug <captcha>`'s `10_slices_on_cleaned.png` shows a slice boundary cutting through a glyph.
 
 ### A note on model size
