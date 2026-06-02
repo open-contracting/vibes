@@ -1,6 +1,14 @@
 ci:
   autoupdate_schedule: quarterly
+  skip: [pip-compile]
 repos:
+  - repo: https://github.com/astral-sh/uv-pre-commit
+    rev: 0.7.19
+    hooks:
+      - id: pip-compile
+        name: pip-compile requirements.in
+        args: [captcha/requirements.in, -o, captcha/requirements.txt]
+        files: ^captcha/requirements\.(in|txt)$
   - repo: https://github.com/biomejs/pre-commit
     rev: v2.4.10
     hooks:
