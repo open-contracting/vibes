@@ -221,9 +221,11 @@
   }
 
   input.addEventListener('input', render);
-  bgRadios.forEach(r => r.addEventListener('change', e => {
-    preview.dataset.bg = e.target.value;
-  }));
+  bgRadios.forEach(r => {
+    r.addEventListener('change', e => {
+      preview.dataset.bg = e.target.value;
+    });
+  });
   clearBtn.addEventListener('click', () => {
     input.value = '';
     render();

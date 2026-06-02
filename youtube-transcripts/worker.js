@@ -114,7 +114,7 @@ async function handleCredits(env) {
 // - Local development (no secret set): direct InnerTube calls, which work from
 //   home IPs and cost nothing.
 function getProvider(env) {
-  if (env && env.SUPADATA_API_KEY) {
+  if (env?.SUPADATA_API_KEY) {
     return {
       name: 'supadata',
       fetchTranscriptForVideo: (id) => supadataTranscript(id, env.SUPADATA_API_KEY),
@@ -137,7 +137,7 @@ function getProvider(env) {
 // a transparent no-op: every request goes straight to the provider.
 
 async function cachedOrFetch(env, ctx, key, ttlSeconds, fetchFn) {
-  const kv = env && env.CACHE;
+  const kv = env?.CACHE;
   if (kv) {
     try {
       const hit = await kv.get(key, 'json');
@@ -324,7 +324,7 @@ async function innertubePlaylist(playlistId) {
 
   const allVideos = [];
   let title = playlistId;
-  let payload = { browseId: 'VL' + playlistId };
+  let payload = { browseId: `VL${playlistId}` };
   let safetyLimit = 10; // up to ~1000 videos via continuation pagination
 
   while (safetyLimit-- > 0) {
@@ -416,8 +416,8 @@ async function supadataRequest(path, apiKey, retries = 3) {
     let body = '';
     try {
       body = await res.text();
-    } catch (e) {}
-    const detail = body ? ': ' + body.slice(0, 200) : '';
+    } catch {}
+    const detail = body ? `: ${body.slice(0, 200)}` : '';
 
     // Retry on 429 (rate limit slipped through) and 5xx (transient). Don't retry on other 4xx.
     if (res.status === 429 || res.status >= 500) {
@@ -511,7 +511,7 @@ function findAll(node, keyName) {
 
 // Single attempt with a specific client. Throws on failure.
 async function callInnerTubeWithClient(client, path, payload) {
-  const url = 'https://www.youtube.com' + path + '?key=' + client.apiKey + '&prettyPrint=false';
+  const url = `https://www.youtube.com${path}?key=${client.apiKey}&prettyPrint=false`;
   const requestId = (payload.videoId || payload.browseId || 'continuation').toString().slice(0, 20);
   console.log(`[${client.name}] ${path} → ${requestId}`);
 
@@ -610,10 +610,11 @@ async function fetchCaptions(captionUrl) {
 function parseCaptionXml(xml) {
   const out = [];
   const re = /<text[^>]*\bstart="([^"]+)"[^>]*>([\s\S]*?)<\/text>/g;
-  let m;
-  while ((m = re.exec(xml)) !== null) {
+  let m = re.exec(xml);
+  while (m !== null) {
     const text = decodeXmlEntities(stripTags(m[2])).replace(/\n/g, ' ').trim();
     if (text) out.push({ start: parseFloat(m[1]), text });
+    m = re.exec(xml);
   }
   return out;
 }
@@ -647,7 +648,7 @@ function decodeXmlEntities(s) {
       if (Number.isFinite(code) && code >= 0 && code <= 0x10ffff) {
         try {
           return String.fromCodePoint(code);
-        } catch (e) {
+        } catch {
           return match;
         }
       }
@@ -666,7 +667,8 @@ async function safeFetch(targetUrl, options) {
 }
 
 function appendParam(url, key, value) {
-  return url + (url.includes('?') ? '&' : '?') + key + '=' + encodeURIComponent(value);
+  const separator = url.includes('?') ? '&' : '?';
+  return `${url}${separator}${key}=${encodeURIComponent(value)}`;
 }
 
 // YouTube caption baseUrl often already has &fmt=srv3 (XML format). The caption
