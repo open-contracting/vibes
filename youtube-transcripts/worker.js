@@ -421,7 +421,7 @@ async function supadataRequest(path, apiKey, retries = 3) {
 
     // Retry on 429 (rate limit slipped through) and 5xx (transient). Don't retry on other 4xx.
     if (res.status === 429 || res.status >= 500) {
-      const wait = 1000 * Math.pow(2, attempt) + Math.random() * 250; // 1s, 2s, 4s + jitter
+      const wait = 1000 * 2 ** attempt + Math.random() * 250; // 1s, 2s, 4s + jitter
       console.log(
         `[supadata] ${path} returned ${res.status}, retrying in ${Math.round(wait)}ms (attempt ${attempt + 1}/${retries})`,
       );
