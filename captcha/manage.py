@@ -1,5 +1,6 @@
 #!/usr/bin/env python
-"""Captcha solver management CLI.
+"""
+Captcha solver management CLI.
 
 All operational commands live here. The library API for callers (`predict()`,
 `predict_with_confidence()`) is in predict.py.
@@ -29,10 +30,11 @@ from pathlib import Path
 import click
 import numpy as np
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
+from bs4 import BeautifulSoup
 from PIL import Image, ImageDraw, ImageFont
 from scipy import ndimage
+from torch import nn
 from torch.utils.data import DataLoader, Dataset
 
 HERE = Path(__file__).resolve().parent
@@ -43,7 +45,7 @@ HERE = Path(__file__).resolve().parent
 
 ALPHABET = string.digits + string.ascii_lowercase + string.ascii_uppercase  # 62 classes
 CHAR_TO_IDX = {c: i for i, c in enumerate(ALPHABET)}
-IDX_TO_CHAR = {i: c for i, c in enumerate(ALPHABET)}
+IDX_TO_CHAR = dict(enumerate(ALPHABET))
 NUM_CLASSES = len(ALPHABET)
 
 N_CHARS = 6
@@ -67,7 +69,8 @@ DEFAULT_SUSPECTS_SHEET = HERE / "suspects.png"
 
 
 def clean(rgb: np.ndarray) -> np.ndarray:
-    """Return a grayscale image where text pixels stay dark and everything else is white.
+    """
+    Return a grayscale image where text pixels stay dark and everything else is white.
 
     Drops chromatic noise via a color filter, then keeps only connected
     components whose bounding box is tall enough to be a letter. The pepper
@@ -83,11 +86,7 @@ def clean(rgb: np.ndarray) -> np.ndarray:
     labels, n = ndimage.label(bridged, structure=np.ones((3, 3), dtype=bool))
     if n:
         slices = ndimage.find_objects(labels)
-        keep_ids = [
-            i + 1
-            for i, sl in enumerate(slices)
-            if (sl[0].stop - sl[0].start) >= MIN_GLYPH_HEIGHT
-        ]
+        keep_ids = [i + 1 for i, sl in enumerate(slices) if (sl[0].stop - sl[0].start) >= MIN_GLYPH_HEIGHT]
         bridged = np.isin(labels, keep_ids)
     out = np.full(rgb.shape[:2], 255, dtype=np.uint8)
     out[bridged & is_text] = intensity[bridged & is_text].astype(np.uint8)
@@ -104,10 +103,9 @@ def text_bbox(gray: np.ndarray) -> tuple[int, int]:
     return int(xs[0]), int(xs[-1]) + 1
 
 
-def component_bboxes(
-    rgb: np.ndarray, max_count: int | None = None
-) -> list[tuple[int, int]]:
-    """Horizontal (x0, x1) ranges of each kept text component, sorted left to right.
+def component_bboxes(rgb: np.ndarray, max_count: int | None = None) -> list[tuple[int, int]]:
+    """
+    Horizontal (x0, x1) ranges of each kept text component, sorted left to right.
 
     Returns components surviving the chroma + intensity filter, vertical 3x1
     bridging, and MIN_GLYPH_HEIGHT filter. If `max_count` is set and more than
@@ -149,7 +147,8 @@ def load_original(path: Path) -> np.ndarray:
 
 
 def char_x_ranges(rgb: np.ndarray) -> list[tuple[int, int]]:
-    """Per-character (x0, x1) column ranges for slicing the original image.
+    """
+    Per-character (x0, x1) column ranges for slicing the original image.
 
     When cleaning produces exactly N_CHARS components, slot widths stay uniform
     (matching the training distribution) but each slot is centered on its
@@ -167,7 +166,7 @@ def char_x_ranges(rgb: np.ndarray) -> list[tuple[int, int]]:
         ranges: list[tuple[int, int]] = []
         for x0, x1 in bboxes:
             c = (x0 + x1) / 2
-            ranges.append((max(0, int(round(c - half))), min(w, int(round(c + half)))))
+            ranges.append((max(0, round(c - half)), min(w, round(c + half))))
         return ranges
     step = (right - left) / N_CHARS
     return [(int(left + i * step), int(left + (i + 1) * step)) for i in range(N_CHARS)]
@@ -183,16 +182,12 @@ def resize_to(crop: np.ndarray, h: int = CROP_H, w: int = CROP_W) -> np.ndarray:
     return np.array(Image.fromarray(crop).resize((w, h), Image.BILINEAR))
 
 
-def build_items(
-    labels: dict[str, str], samples_dir: Path
-) -> list[tuple[Path, int, str]]:
+def build_items(labels: dict[str, str], samples_dir: Path) -> list[tuple[Path, int, str]]:
     """Flatten labels.json into (path, char_index, char) triples for training."""
     items: list[tuple[Path, int, str]] = []
     for fname, label in labels.items():
         if len(label) != N_CHARS:
-            click.echo(
-                f"skip {fname}: label '{label}' is not {N_CHARS} chars", err=True
-            )
+            click.echo(f"skip {fname}: label '{label}' is not {N_CHARS} chars", err=True)
             continue
         path = samples_dir / fname
         if not path.exists():
@@ -212,9 +207,7 @@ def build_items(
 
 
 class CharDataset(Dataset):
-    def __init__(
-        self, items: list[tuple[Path, int, str]], augment: bool = False
-    ) -> None:
+    def __init__(self, items: list[tuple[Path, int, str]], augment: bool = False) -> None:
         self.items = items
         self.augment = augment
 
@@ -245,7 +238,8 @@ class CharDataset(Dataset):
 
 
 class TinyCNN(nn.Module):
-    """Small CNN with a 2-row adaptive pool to preserve vertical position.
+    """
+    Small CNN with a 2-row adaptive pool to preserve vertical position.
 
     The (2, 1) pool keeps a top-half vs bottom-half distinction in the feature
     vector — useful for distinguishing characters that differ mainly in where a
@@ -287,8 +281,10 @@ def fit_one(
     save_best_to: Path | None,
     log_prefix: str = "",
 ) -> tuple[TinyCNN, float, int]:
-    """Train one model. If save_best_to is set and val_items is non-empty,
-    save the best-by-val-acc checkpoint. Returns (model, best_val_acc, best_epoch)."""
+    """
+    Train one model. If save_best_to is set and val_items is non-empty,
+    save the best-by-val-acc checkpoint. Returns (model, best_val_acc, best_epoch).
+    """
     train_dl = DataLoader(
         CharDataset(train_items, augment=True),
         batch_size=batch_size,
@@ -403,11 +399,7 @@ def print_inline_kitty(img: Image.Image, term_rows: int) -> None:
         for i in range(0, len(data), KITTY_CHUNK_SIZE):
             chunk = data[i : i + KITTY_CHUNK_SIZE]
             more = i + KITTY_CHUNK_SIZE < len(data)
-            params = (
-                f"{base_params},m={1 if more else 0}"
-                if first
-                else f"m={1 if more else 0}"
-            )
+            params = f"{base_params},m={1 if more else 0}" if first else f"m={1 if more else 0}"
             first = False
             sys.stdout.write(f"\033_G{params};{chunk}\033\\")
     sys.stdout.write("\n")
@@ -432,16 +424,13 @@ def parse_suspects(path: Path) -> list[tuple[str, int, str, str, float]]:
     for line in path.read_text().splitlines():
         m = rgx.match(line.strip())
         if m:
-            out.append(
-                (m.group(1), int(m.group(2)), m.group(3), m.group(4), float(m.group(5)))
-            )
+            out.append((m.group(1), int(m.group(2)), m.group(3), m.group(4), float(m.group(5))))
     return out
 
 
-def annotated_suspect_image(
-    samples_dir: Path, fname: str, pos: int, scale: int = 4
-) -> Image.Image:
-    """Captcha scaled up with a red box around the suspect column.
+def annotated_suspect_image(samples_dir: Path, fname: str, pos: int, scale: int = 4) -> Image.Image:
+    """
+    Captcha scaled up with a red box around the suspect column.
 
     Uses the same per-character slicing as `char_crops`, so the box reflects
     exactly what the CNN sees during training.
@@ -472,24 +461,17 @@ def cli() -> None:
 BASE_URL = "https://assamtenders.gov.in/nicgep/app"
 PAGE_PARAMS = {"page": "WebTenderStatusLists", "service": "page"}
 USER_AGENT = (
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
 )
 CAPTCHA_RE = re.compile(rb'id="captchaImage"[^>]*src="data:image/png;base64,([^"]+)"')
 
 
 def _fetch_form_data(html: bytes):
-    from bs4 import BeautifulSoup
-
     soup = BeautifulSoup(html, "html.parser")
     form = soup.find("form", id="frmSearchFilter")
     if form is None:
         raise RuntimeError("frmSearchFilter form not found on page")
-    return {
-        i["name"]: i.get("value", "")
-        for i in form.find_all("input", {"type": "hidden"})
-        if i.get("name")
-    }
+    return {i["name"]: i.get("value", "") for i in form.find_all("input", {"type": "hidden"}) if i.get("name")}
 
 
 def _fetch_b64(html: bytes) -> str:
@@ -501,9 +483,7 @@ def _fetch_b64(html: bytes) -> str:
 
 @cli.command()
 @click.argument("n", type=int)
-@click.option(
-    "--start", default=1, show_default=True, type=int, help="First file index"
-)
+@click.option("--start", default=1, show_default=True, type=int, help="First file index")
 @click.option(
     "-o",
     "--output-dir",
@@ -567,9 +547,7 @@ def fetch(n: int, start: int, output_dir: Path, delay: float) -> None:
 
 
 @cli.command()
-@click.option(
-    "--start", required=True, type=int, help="First captcha index (inclusive)"
-)
+@click.option("--start", required=True, type=int, help="First captcha index (inclusive)")
 @click.option("--end", required=True, type=int, help="Last captcha index (inclusive)")
 @click.option(
     "--samples",
@@ -604,23 +582,16 @@ def labelsheet(start: int, end: int, samples: Path, output: Path) -> None:
         y0 = (row_h - h) // 2
         row[y0 : y0 + h, label_w + 4 :] = cleaned_rgb
         pil = Image.fromarray(row)
-        ImageDraw.Draw(pil).text(
-            (8, (row_h - 24) // 2), f"{i:04d}", fill=(0, 0, 0), font=font
-        )
+        ImageDraw.Draw(pil).text((8, (row_h - 24) // 2), f"{i:04d}", fill=(0, 0, 0), font=font)
         rows.append(np.array(pil))
     if not rows:
         click.echo("no captchas found in range", err=True)
         return
     max_w = max(r.shape[1] for r in rows)
-    padded = [
-        np.pad(r, ((0, 0), (0, max_w - r.shape[1]), (0, 0)), constant_values=255)
-        for r in rows
-    ]
+    padded = [np.pad(r, ((0, 0), (0, max_w - r.shape[1]), (0, 0)), constant_values=255) for r in rows]
     sheet = np.vstack(padded)
     Image.fromarray(sheet).save(output)
-    click.echo(
-        f"Wrote {output} ({len(rows)} rows, {sheet.shape[1]}x{sheet.shape[0]} px)"
-    )
+    click.echo(f"Wrote {output} ({len(rows)} rows, {sheet.shape[1]}x{sheet.shape[0]} px)")
 
 
 # ----- train -----
@@ -796,9 +767,7 @@ def xval(
 
     if report_only:
         if not output.exists():
-            raise click.ClickException(
-                f"{output} not found; run xval without --report-only first."
-            )
+            raise click.ClickException(f"{output} not found; run xval without --report-only first.")
         suspects = parse_suspects(output)
         _pair_report(suspects, total_chars)
         return
@@ -810,9 +779,7 @@ def xval(
     fnames = sorted(labels)
     random.shuffle(fnames)
     fold_size = len(fnames) // folds
-    fold_groups = [
-        fnames[i * fold_size : (i + 1) * fold_size] for i in range(folds - 1)
-    ]
+    fold_groups = [fnames[i * fold_size : (i + 1) * fold_size] for i in range(folds - 1)]
     fold_groups.append(fnames[(folds - 1) * fold_size :])
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     predictions: dict[tuple[str, int], tuple[str, float]] = {}
@@ -820,9 +787,7 @@ def xval(
         val_set = set(val_fnames)
         train_labels = {f: l for f, l in labels.items() if f not in val_set}
         train_items = build_items(train_labels, samples)
-        click.echo(
-            f"Fold {fi}/{folds}: training on {len(train_items)} chars, val {len(val_fnames)} captchas"
-        )
+        click.echo(f"Fold {fi}/{folds}: training on {len(train_items)} chars, val {len(val_fnames)} captchas")
         model, _, _ = fit_one(
             train_items,
             None,
@@ -841,14 +806,7 @@ def xval(
                 crops = char_crops(rgb)
                 batch = torch.stack(
                     [
-                        (
-                            (
-                                torch.from_numpy(resize_to(c, CROP_H, CROP_W)).float()
-                                / 255.0
-                                - 0.5
-                            )
-                            / 0.5
-                        ).unsqueeze(0)
+                        ((torch.from_numpy(resize_to(c, CROP_H, CROP_W)).float() / 255.0 - 0.5) / 0.5).unsqueeze(0)
                         for c in crops
                     ]
                 ).to(device)
@@ -875,11 +833,7 @@ def xval(
     suspects.sort(key=lambda s: -s[4])
 
     output.write_text(
-        "\n".join(
-            f"{f}  pos={p}  label={e!r}  pred={pr!r}  conf={c:.3f}"
-            for f, p, e, pr, c in suspects
-        )
-        + "\n"
+        "\n".join(f"{f}  pos={p}  label={e!r}  pred={pr!r}  conf={c:.3f}" for f, p, e, pr, c in suspects) + "\n"
     )
     click.echo(f"Wrote {output}")
 
@@ -893,16 +847,11 @@ def xval(
     click.echo(f"xval finished in {int(mins)}m {secs:.1f}s")
 
 
-def _pair_report(
-    suspects: list[tuple[str, int, str, str, float]], total_chars: int
-) -> None:
+def _pair_report(suspects: list[tuple[str, int, str, str, float]], total_chars: int) -> None:
     """Print per-char accuracy + a breakdown of the top confusion pairs."""
     n_dis = len(suspects)
     correct = total_chars - n_dis
-    click.echo(
-        f"Cross-validated per-char accuracy: {correct}/{total_chars} = "
-        f"{correct / total_chars:.3%}"
-    )
+    click.echo(f"Cross-validated per-char accuracy: {correct}/{total_chars} = {correct / total_chars:.3%}")
     click.echo(f"Total disagreements: {n_dis}")
     if not n_dis:
         return
@@ -967,10 +916,7 @@ def _render_suspect_sheet(
     if not rows:
         return
     max_w = max(r.shape[1] for r in rows)
-    padded = [
-        np.pad(r, ((0, 0), (0, max_w - r.shape[1]), (0, 0)), constant_values=240)
-        for r in rows
-    ]
+    padded = [np.pad(r, ((0, 0), (0, max_w - r.shape[1]), (0, 0)), constant_values=240) for r in rows]
     Image.fromarray(np.vstack(padded)).save(output)
     click.echo(f"Wrote {output} ({len(rows)} rows)")
 
@@ -1016,9 +962,7 @@ def _render_suspect_sheet(
     type=float,
     help="Maximum suspect confidence to include.",
 )
-@click.option(
-    "--start", default=0, show_default=True, type=int, help="Skip the first N suspects."
-)
+@click.option("--start", default=0, show_default=True, type=int, help="Skip the first N suspects.")
 @click.option(
     "--no-image",
     is_flag=True,
@@ -1070,9 +1014,7 @@ def review(
     if pair:
         parts = [p.strip() for p in pair.split(",")]
         if len(parts) != 2 or any(len(p) != 1 for p in parts):
-            raise click.BadParameter(
-                f"--pair must be two characters separated by a comma, e.g. n,h (got {pair!r})"
-            )
+            raise click.BadParameter(f"--pair must be two characters separated by a comma, e.g. n,h (got {pair!r})")
         pair_chars = {frozenset(parts)}
     suspects = parse_suspects(suspects_path)
     suspects = [s for s in suspects if min_conf <= s[4] <= max_conf]
@@ -1087,9 +1029,7 @@ def review(
         f"Reviewing {len(suspects)} suspects (conf {min_conf}..{max_conf}); "
         f"image protocol: {proto if not no_image else 'none'}"
     )
-    click.echo(
-        "Keys: enter/1=keep label, 2=use prediction, e=enter char, q=save & quit, ?=help"
-    )
+    click.echo("Keys: enter/1=keep label, 2=use prediction, e=enter char, q=save & quit, ?=help")
     click.echo()
 
     decisions = {"keep": 0, "fix": 0}
@@ -1106,8 +1046,8 @@ def review(
             click.echo(f"[{i}/{len(suspects)}] {fname}  pos={pos + 1}  conf={conf:.2f}")
             click.echo(f"  1) {expected}  [enter]")
             click.echo(f"  2) {predicted}")
-            click.echo(f"  e) enter a different character")
-            click.echo(f"  q) save and quit")
+            click.echo("  e) enter a different character")
+            click.echo("  q) save and quit")
             while True:
                 choice = input("? ").strip().lower()
                 if choice == "":
@@ -1118,9 +1058,7 @@ def review(
             if choice == "q":
                 break
             if choice == "?":
-                click.echo(
-                    "  enter/1=keep label, 2=use prediction, e=enter custom char, q=save & quit"
-                )
+                click.echo("  enter/1=keep label, 2=use prediction, e=enter custom char, q=save & quit")
                 continue
             if choice == "1":
                 decisions["keep"] += 1
@@ -1132,13 +1070,11 @@ def review(
                     custom = input("  character: ").strip()
                     if len(custom) == 1 and custom in ALPHABET:
                         break
-                    click.echo(
-                        f"  must be a single character from the alphabet (0-9, a-z, A-Z); got {custom!r}"
-                    )
+                    click.echo(f"  must be a single character from the alphabet (0-9, a-z, A-Z); got {custom!r}")
                 labels[fname] = current[:pos] + custom + current[pos + 1 :]
                 decisions["fix"] += 1
             click.echo()
-    except (KeyboardInterrupt, EOFError):
+    except KeyboardInterrupt, EOFError:
         click.echo("\nInterrupted.")
 
     click.echo()
@@ -1216,7 +1152,8 @@ def verify(
     term_rows: int,
     protocol: str,
 ) -> None:
-    """Re-verify every position whose label is one of the given characters.
+    """
+    Re-verify every position whose label is one of the given characters.
 
     Unlike review, this iterates over labels.json directly — it doesn't depend
     on suspects.txt — so it can catch systematic labelling biases that the
@@ -1229,9 +1166,7 @@ def verify(
     target_chars = set(chars.replace(",", ""))
     invalid = sorted(c for c in target_chars if c not in ALPHABET)
     if invalid:
-        raise click.BadParameter(
-            f"invalid characters (must be a-z, A-Z, 0-9): {invalid}"
-        )
+        raise click.BadParameter(f"invalid characters (must be a-z, A-Z, 0-9): {invalid}")
 
     proto = detect_terminal_protocol() if protocol == "auto" else protocol
     labels: dict[str, str] = json.loads(labels_path.read_text())
@@ -1260,9 +1195,7 @@ def verify(
         f"(chars: {sorted(target_chars)}); image protocol: "
         f"{proto if not no_image else 'none'}"
     )
-    click.echo(
-        "Keys: Enter=keep, <char>=replace with that char, ?=help, Ctrl-C=save & quit"
-    )
+    click.echo("Keys: Enter=keep, <char>=replace with that char, ?=help, Ctrl-C=save & quit")
     click.echo()
 
     decisions = {"keep": 0, "fix": 0}
@@ -1276,9 +1209,7 @@ def verify(
                 if prev_char is not None:
                     click.echo()
                 click.echo("=" * 60)
-                click.echo(
-                    f"  Now reviewing: '{current_char}'  ({char_counts[current_char]} positions)"
-                )
+                click.echo(f"  Now reviewing: '{current_char}'  ({char_counts[current_char]} positions)")
                 click.echo("=" * 60)
                 input("Press Enter to start (Ctrl-C to quit) ")
                 click.echo()
@@ -1305,11 +1236,9 @@ def verify(
                     labels[fname] = current[:pos] + choice + current[pos + 1 :]
                     decisions["fix"] += 1
                     break
-                click.echo(
-                    f"  must be Enter, a single character from 0-9/a-z/A-Z, or ?; got {choice!r}"
-                )
+                click.echo(f"  must be Enter, a single character from 0-9/a-z/A-Z, or ?; got {choice!r}")
             click.echo()
-    except (KeyboardInterrupt, EOFError):
+    except KeyboardInterrupt, EOFError:
         click.echo("\nInterrupted.")
 
     click.echo()
@@ -1328,9 +1257,7 @@ def verify(
 
 
 @cli.command()
-@click.argument(
-    "image_path", type=click.Path(exists=True, dir_okay=False, path_type=Path)
-)
+@click.argument("image_path", type=click.Path(exists=True, dir_okay=False, path_type=Path))
 @click.option(
     "--model",
     type=click.Path(dir_okay=False, path_type=Path),
@@ -1344,13 +1271,13 @@ def verify(
     help="Also print the model's per-character softmax confidence.",
 )
 def predict_cmd(image_path: Path, model: Path, confidence: bool) -> None:
-    """Predict a captcha's text. (Library API: import from predict.py.)"""
+    """Predict a captcha's text. (Library API: import from predict.py.)."""
     from predict import predict, predict_with_confidence  # local import; avoids cycle
 
     if confidence:
         text, conf = predict_with_confidence(image_path, model)
         click.echo(text)
-        click.echo(" ".join(f"{c}={p:.2f}" for c, p in zip(text, conf)))
+        click.echo(" ".join(f"{c}={p:.2f}" for c, p in zip(text, conf, strict=False)))
     else:
         click.echo(predict(image_path, model))
 
@@ -1363,9 +1290,7 @@ predict_cmd.name = "predict"
 
 
 @cli.command()
-@click.argument(
-    "image_path", type=click.Path(exists=True, dir_okay=False, path_type=Path)
-)
+@click.argument("image_path", type=click.Path(exists=True, dir_okay=False, path_type=Path))
 @click.option(
     "--out-dir",
     type=click.Path(file_okay=False, path_type=Path),
@@ -1374,7 +1299,8 @@ predict_cmd.name = "predict"
     help="Parent dir; outputs go into <out-dir>/<captcha_stem>/",
 )
 def debug(image_path: Path, out_dir: Path) -> None:
-    """Write every intermediate preprocessing artefact for one captcha to disk.
+    """
+    Write every intermediate preprocessing artefact for one captcha to disk.
 
     Useful for understanding why a particular suspect is what it is, or for
     spotting segmentation drift in the slice boundaries.
@@ -1392,14 +1318,10 @@ def debug(image_path: Path, out_dir: Path) -> None:
     Image.fromarray(chroma).save(target / "03_chroma.png")
 
     is_text = (chroma < CHROMA_MAX) & (intensity < INTENSITY_MAX)
-    Image.fromarray((~is_text * 255).astype(np.uint8)).save(
-        target / "04_is_text_mask.png"
-    )
+    Image.fromarray((~is_text * 255).astype(np.uint8)).save(target / "04_is_text_mask.png")
 
     bridged = ndimage.binary_closing(is_text, structure=np.ones((3, 1), dtype=bool))
-    Image.fromarray((~bridged * 255).astype(np.uint8)).save(
-        target / "05_bridged_mask.png"
-    )
+    Image.fromarray((~bridged * 255).astype(np.uint8)).save(target / "05_bridged_mask.png")
 
     labels, n = ndimage.label(bridged, structure=np.ones((3, 3), dtype=bool))
     rng = np.random.default_rng(0)
@@ -1410,15 +1332,9 @@ def debug(image_path: Path, out_dir: Path) -> None:
     Image.fromarray(palette[labels]).save(target / "06_components.png")
 
     slices = ndimage.find_objects(labels)
-    keep_ids = [
-        i + 1
-        for i, sl in enumerate(slices)
-        if (sl[0].stop - sl[0].start) >= MIN_GLYPH_HEIGHT
-    ]
+    keep_ids = [i + 1 for i, sl in enumerate(slices) if (sl[0].stop - sl[0].start) >= MIN_GLYPH_HEIGHT]
     kept = np.isin(labels, keep_ids)
-    Image.fromarray((~kept * 255).astype(np.uint8)).save(
-        target / "07_kept_components.png"
-    )
+    Image.fromarray((~kept * 255).astype(np.uint8)).save(target / "07_kept_components.png")
 
     click.echo(f"{n} connected components in 05_bridged_mask:")
     for i, sl in enumerate(slices, 1):
@@ -1426,8 +1342,7 @@ def debug(image_path: Path, out_dir: Path) -> None:
         x0, x1 = sl[1].start, sl[1].stop
         keep = "KEEP" if (y1 - y0) >= MIN_GLYPH_HEIGHT else "drop"
         click.echo(
-            f"  id={i:2d} bbox=(y={y0:>3d}..{y1:<3d} h={y1 - y0:2d}, "
-            f"x={x0:>3d}..{x1:<3d} w={x1 - x0:2d})  {keep}"
+            f"  id={i:2d} bbox=(y={y0:>3d}..{y1:<3d} h={y1 - y0:2d}, x={x0:>3d}..{x1:<3d} w={x1 - x0:2d})  {keep}"
         )
 
     cleaned = clean(rgb)

@@ -1,5 +1,6 @@
 #!/usr/bin/env python
-"""Predict the 6-character text of an Assam tenders captcha.
+"""
+Predict the 6-character text of an Assam tenders captcha.
 
 Library usage:
     from predict import predict, predict_with_confidence
@@ -27,10 +28,7 @@ from typing import Union
 import numpy as np
 import torch
 import torch.nn.functional as F
-from PIL import Image
-
 from manage import (
-    CHAR_TO_IDX,
     CROP_H,
     CROP_W,
     IDX_TO_CHAR,
@@ -38,6 +36,7 @@ from manage import (
     char_crops,
     resize_to,
 )
+from PIL import Image
 
 ImageInput = Union[str, bytes, Path, Image.Image, np.ndarray]
 DEFAULT_MODEL_PATH = Path(__file__).parent / "captcha_cnn.pt"
@@ -67,10 +66,7 @@ def _to_rgb(image: ImageInput) -> np.ndarray:
     elif isinstance(image, (str, Path)):
         s = str(image)
         # Heuristic: if it looks like base64 (not a filesystem path), decode it.
-        if isinstance(image, Path) or _looks_like_path(s):
-            pil = Image.open(s)
-        else:
-            pil = _open_b64(s)
+        pil = Image.open(s) if isinstance(image, Path) or _looks_like_path(s) else _open_b64(s)
     elif isinstance(image, bytes):
         pil = Image.open(io.BytesIO(image))
     else:
@@ -83,9 +79,7 @@ def _to_rgb(image: ImageInput) -> np.ndarray:
 
 def _looks_like_path(s: str) -> bool:
     # Treat anything short with a known image suffix or an existing file as a path.
-    if len(s) < 260 and (
-        s.endswith(".png") or s.endswith(".jpg") or s.endswith(".jpeg")
-    ):
+    if len(s) < 260 and (s.endswith((".png", ".jpg", ".jpeg"))):
         return True
     return Path(s).exists()
 
@@ -124,9 +118,7 @@ def predict(image: ImageInput, model_path: Path = DEFAULT_MODEL_PATH) -> str:
     return _infer(_to_rgb(image), model_path)[0]
 
 
-def predict_with_confidence(
-    image: ImageInput, model_path: Path = DEFAULT_MODEL_PATH
-) -> tuple[str, list[float]]:
+def predict_with_confidence(image: ImageInput, model_path: Path = DEFAULT_MODEL_PATH) -> tuple[str, list[float]]:
     """Return (prediction, per-character confidence) for the captcha image."""
     return _infer(_to_rgb(image), model_path)
 
@@ -135,15 +127,13 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("image", help="Path to a PNG captcha")
     parser.add_argument("--model", type=Path, default=DEFAULT_MODEL_PATH)
-    parser.add_argument(
-        "--confidence", action="store_true", help="Also print per-char confidence"
-    )
+    parser.add_argument("--confidence", action="store_true", help="Also print per-char confidence")
     args = parser.parse_args()
 
     if args.confidence:
         text, conf = predict_with_confidence(args.image, args.model)
         print(text)
-        print(" ".join(f"{c}={p:.2f}" for c, p in zip(text, conf)))
+        print(" ".join(f"{c}={p:.2f}" for c, p in zip(text, conf, strict=False)))
     else:
         print(predict(args.image, args.model))
     return 0
