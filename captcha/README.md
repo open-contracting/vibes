@@ -1,6 +1,6 @@
 # Assam Tenders Captcha Solver
 
-A small PyTorch CNN that reads 6-character captchas from the Assam tenders portal. Trained on 800 labeled samples, currently scores **99.7% per-character** on held-out validation.
+A small PyTorch CNN that reads 6-character captchas from the Assam tenders portal. Trained on 800 labeled samples (with 6 characters each). Currently scores **99.7% per-character** on held-out validation.
 
 ## Setup
 
