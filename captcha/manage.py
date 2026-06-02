@@ -261,9 +261,9 @@ class TinyCNN(nn.Module):
             nn.Conv2d(64, 128, 3, padding=1),
             nn.BatchNorm2d(128),
             nn.ReLU(),
-            nn.AdaptiveAvgPool2d((2, 1)),
+            nn.AdaptiveAvgPool2d((3, 1)),
         )
-        self.classifier = nn.Linear(128 * 2, num_classes)
+        self.classifier = nn.Linear(128 * 3, num_classes)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.classifier(self.features(x).flatten(1))
@@ -1082,7 +1082,7 @@ def review(
     if decisions["fix"]:
         backup = labels_path.with_suffix(labels_path.suffix + ".cli.bak")
         shutil.copy(labels_path, backup)
-        labels_path.write_text(json.dumps(labels, indent=2))
+        labels_path.write_text(json.dumps(labels, indent=2) + "\n")
         click.echo(f"Wrote {decisions['fix']} corrections to {labels_path}")
         click.echo(f"Backup at {backup}")
     else:
@@ -1246,7 +1246,7 @@ def verify(
     if decisions["fix"]:
         backup = labels_path.with_suffix(labels_path.suffix + ".verify.bak")
         shutil.copy(labels_path, backup)
-        labels_path.write_text(json.dumps(labels, indent=2))
+        labels_path.write_text(json.dumps(labels, indent=2) + "\n")
         click.echo(f"Wrote {decisions['fix']} corrections to {labels_path}")
         click.echo(f"Backup at {backup}")
     else:
