@@ -2,7 +2,7 @@
 """
 Predict the 6-character text of an Assam tenders captcha.
 
-Library usage:
+Library API:
     from predict import predict, predict_with_confidence
 
     text = predict("samples/captcha_0001.png")
@@ -11,17 +11,14 @@ Library usage:
     text = predict(pil_image)               # PIL.Image
     text, conf = predict_with_confidence(image)  # conf is list[float], one per character
 
-CLI usage:
-    ./predict.py samples/captcha_0001.png
+The CLI lives in `manage.py predict`.
 """
 
 from __future__ import annotations
 
-import argparse
 import base64
 import binascii
 import io
-import sys
 from functools import cache
 from pathlib import Path
 
@@ -121,23 +118,3 @@ def predict(image: ImageInput, model_path: Path = DEFAULT_MODEL_PATH) -> str:
 def predict_with_confidence(image: ImageInput, model_path: Path = DEFAULT_MODEL_PATH) -> tuple[str, list[float]]:
     """Return (prediction, per-character confidence) for the captcha image."""
     return _infer(_to_rgb(image), model_path)
-
-
-def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("image", help="Path to a PNG captcha")
-    parser.add_argument("--model", type=Path, default=DEFAULT_MODEL_PATH)
-    parser.add_argument("--confidence", action="store_true", help="Also print per-char confidence")
-    args = parser.parse_args()
-
-    if args.confidence:
-        text, conf = predict_with_confidence(args.image, args.model)
-        print(text)
-        print(" ".join(f"{c}={p:.2f}" for c, p in zip(text, conf, strict=False)))
-    else:
-        print(predict(args.image, args.model))
-    return 0
-
-
-if __name__ == "__main__":
-    sys.exit(main())
