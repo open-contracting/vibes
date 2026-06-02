@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+# ruff: noqa: INP001
 """
 Predict the 6-character text of an Assam tenders captcha.
 
