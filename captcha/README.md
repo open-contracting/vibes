@@ -1,6 +1,6 @@
 # Assam Tenders Captcha Solver
 
-A small PyTorch CNN that reads 6-character captchas from the Assam tenders portal. Trained on 800 labeled samples, currently scores **99.6% per-character** on held-out validation.
+A small PyTorch CNN that reads 6-character captchas from the Assam tenders portal. Trained on 800 labeled samples, currently scores **99.7% per-character** on held-out validation.
 
 ## Setup
 
@@ -42,7 +42,7 @@ A retry-aware caller can refresh the captcha when `min(conf) < 0.5` rather than 
 
 1. **Preprocess** (`manage.py`): composite the PNG over white, drop chromatic noise (colored lines/dots) via a chroma + intensity filter, drop short connected components (pepper noise), bridge 1-pixel vertical gaps inside glyphs, find the connected components of the surviving text.
 2. **Segment**: if exactly 6 components remain, each crop is a uniform-width slot centered on its component (so wide letters like `B` aren't chopped by the slot boundary). When cleaning loses or merges a glyph, fall back to dividing the full text bbox into 6 equal parts.
-3. **Classify** each crop with `TinyCNN` (defined in `manage.py`): three conv blocks with channel widths **32 → 64 → 128** (each `Conv2d(3×3) + BatchNorm + ReLU`, max-pool after the first two), then `AdaptiveAvgPool2d((2, 1))` → 256-dim feature vector (two vertical bins × 128 channels) → `Linear(256, 62)`. Roughly 100k parameters total. The (2, 1) pool preserves a top-half/bottom-half signal, which is what distinguishes pairs like p/b (descender vs ascender) and n/h (no ascender vs ascender). Concatenate the 6 predictions into the final string.
+3. **Classify** each crop with `TinyCNN` (defined in `manage.py`): three conv blocks with channel widths **32 → 64 → 128** (each `Conv2d(3×3) + BatchNorm + ReLU`, max-pool after the first two), then `AdaptiveAvgPool2d((3, 1))` → 384-dim feature vector (three vertical bins × 128 channels) → `Linear(384, 62)`. Roughly 100k parameters total. The (3, 1) pool preserves a vertical-zone signal (ascender / x-height / descender), which is what distinguishes pairs like p/b (descender vs ascender) and n/h (no ascender vs ascender). Concatenate the 6 predictions into the final string.
 
 The captcha is case-sensitive, so the alphabet is 62 classes (`0-9 a-z A-Z`). See [A note on model size](#a-note-on-model-size) for why this architecture isn't a tuning lever.
 
@@ -260,3 +260,17 @@ The conventional advice when accuracy plateaus is "bigger CNN" — more channel 
 ### A note on augmentation
 
 The standard CNN-tuning playbook recommends piling on geometric augmentations — random affine, scale, shear, cutout — when accuracy plateaus. **For this captcha that won't help.** The generator doesn't rotate, translate, scale, or shear its letters, so those transforms train the model on a distribution it'll never see at inference. The noise that does appear in real captchas (per-pixel pepper, occasional thin white streaks from cleaned chroma lines) is already covered by the salt + pepper in `CharDataset._augment`. If you want to push augmentation further, the on-distribution moves are slightly higher pepper density or simulated thin white streaks — not the geometric transforms. In our experience the bigger lever at this stage is cleaning more labels, not augmenting harder.
+
+## Things we tried that didn't help
+
+Negative results, recorded so the next person doesn't repeat them.
+
+| Change | Result vs baseline | Why it failed |
+|---|---|---|
+| horizontal jitter (±2px) | 42 errors (+7) | Premise was that inference-time segmentation drift creates a train/test gap. It doesn't: `char_x_ranges()` recenters slots on detected components at inference, so train and inference distributions already align. Added jitter pushed the model into underfitting. |
+| horizontal+vertical jitter (±2px, ±1px) | 46 errors (+11) | Vertical jitter directly undermines the position signal `(3, 1)` was added to preserve — `n↔h` confusion jumped to 7. |
+| Dropout(0.2) before Linear | 44 errors (+9) | Same failure mode: 20% feature dropout on a 384-dim layer is enough to damage the position-sensitive features the `(3, 1)` pool relies on. Model wasn't overfitting — its converged training loss is the model fitting the data's signal floor, not a ceiling to pull back from. |
+| AdamW `weight_decay=1e-4` (from 1e-3) | 36 errors (+1) | Wash. Training loss converged to ~the same value, confirming weight_decay wasn't doing much regularization work at 1e-3 either. The hyperparameter doesn't matter here at this scale. |
+| `AdaptiveAvgPool2d((3, 2))` | 43 errors (+8) | Doubled the Linear input (384 → 768) on the same 4,800 training chars. `h↔n` actually improved slightly, but errors scattered across many new one-off long-tail pairs — extra capacity fit per-class idiosyncrasies rather than generalizable features. Single-character crops have little horizontal structure to bin anyway. |
+
+**Pattern:** with ~4,800 training characters feeding position-sensitive features, every extra regularizer (jitter, dropout) damaged the very signal we'd worked to preserve, and every increase in classifier capacity ((3, 2), and previously a bigger CNN) made the model fit noise. Both directions hurt for the same reason: adding regularization works on models with spare capacity to give up, and adding capacity works on models that aren't already saturated by their data — ours is neither. The remaining ~35 errors look intrinsic (V/v, L/1, P/h, J/j case ambiguity) — features the rendered glyphs genuinely share.
