@@ -13,11 +13,7 @@
  *   wrangler deploy
  */
 
-const ALLOWED_HOSTS = new Set([
-  'www.youtube.com',
-  'youtube.com',
-  'm.youtube.com',
-]);
+const ALLOWED_HOSTS = new Set(['www.youtube.com', 'youtube.com', 'm.youtube.com']);
 
 // InnerTube clients to try, in order. Order matters: we put clients that tolerate
 // anonymous datacenter IPs (like Cloudflare Worker egress) first.
@@ -93,7 +89,7 @@ async function handleCredits(env) {
     return json({ provider: 'innertube' });
   }
   try {
-    await paceSupadata();  // Share the rate-limit gate with transcript calls
+    await paceSupadata(); // Share the rate-limit gate with transcript calls
     const res = await fetch('https://api.supadata.ai/v1/me', {
       headers: { 'x-api-key': env.SUPADATA_API_KEY },
     });
@@ -163,9 +159,10 @@ async function cachedOrFetch(env, ctx, key, ttlSeconds, fetchFn) {
     // after the response is sent and the cache stays empty.
     const writeOptions = ttlSeconds ? { expirationTtl: ttlSeconds } : {};
     ctx.waitUntil(
-      kv.put(key, JSON.stringify(data), writeOptions)
+      kv
+        .put(key, JSON.stringify(data), writeOptions)
         .then(() => console.log(`[cache] wrote ${key}`))
-        .catch((e) => console.log(`[cache] write failed for ${key}: ${e.message}`))
+        .catch((e) => console.log(`[cache] write failed for ${key}: ${e.message}`)),
     );
   }
 
@@ -187,8 +184,8 @@ async function handleTranscript(videoId, request, env, ctx) {
       env,
       ctx,
       `transcript:${videoId}`,
-      null,  // no TTL — transcripts are immutable
-      () => provider.fetchTranscriptForVideo(videoId)
+      null, // no TTL — transcripts are immutable
+      () => provider.fetchTranscriptForVideo(videoId),
     );
     return json({ ...data, cached });
   } catch (e) {
@@ -207,9 +204,10 @@ async function innertubeTranscript(videoId) {
     throw new Error(`No captions available for "${title}"`);
   }
 
-  const track = tracks.find(t => t.languageCode === 'en' && t.kind !== 'asr')
-             || tracks.find(t => t.languageCode?.startsWith('en'))
-             || tracks[0];
+  const track =
+    tracks.find((t) => t.languageCode === 'en' && t.kind !== 'asr') ||
+    tracks.find((t) => t.languageCode?.startsWith('en')) ||
+    tracks[0];
 
   const captionUrl = setFmtJson3(track.baseUrl);
   const segments = await fetchCaptions(captionUrl);
@@ -240,8 +238,8 @@ async function handlePlaylist(playlistId, request, env, ctx) {
       env,
       ctx,
       `playlist:${playlistId}`,
-      86400,  // 24h TTL
-      () => provider.getPlaylistVideos(playlistId)
+      86400, // 24h TTL
+      () => provider.getPlaylistVideos(playlistId),
     );
     const { title: playlistTitle, videos } = playlistData;
 
@@ -268,12 +266,8 @@ async function handlePlaylist(playlistId, request, env, ctx) {
     let cacheHits = 0;
     const results = await parallelMap(toProcess, concurrency, async (video) => {
       try {
-        const { data, cached } = await cachedOrFetch(
-          env,
-          ctx,
-          `transcript:${video.videoId}`,
-          null,
-          () => provider.fetchTranscriptForVideo(video.videoId)
+        const { data, cached } = await cachedOrFetch(env, ctx, `transcript:${video.videoId}`, null, () =>
+          provider.fetchTranscriptForVideo(video.videoId),
         );
         if (cached) cacheHits++;
         // Preserve playlist title if the provider didn't return one
@@ -288,7 +282,9 @@ async function handlePlaylist(playlistId, request, env, ctx) {
       }
     });
 
-    console.log(`Playlist ${playlistId}: ${cacheHits}/${results.length} from cache (playlist enum: ${playlistCached ? 'cached' : 'fresh'})`);
+    console.log(
+      `Playlist ${playlistId}: ${cacheHits}/${results.length} from cache (playlist enum: ${playlistCached ? 'cached' : 'fresh'})`,
+    );
 
     return json({
       playlistId,
@@ -324,7 +320,7 @@ async function innertubePlaylist(playlistId) {
   // Use the WEB client specifically for playlist enumeration. WEB returns more
   // videos per page than ANDROID and its response shape is more predictable.
   // Playlists aren't rate-limit-sensitive the way player calls are.
-  const webClient = INNERTUBE_CLIENTS.find(c => c.name === 'WEB');
+  const webClient = INNERTUBE_CLIENTS.find((c) => c.name === 'WEB');
 
   const allVideos = [];
   let title = playlistId;
@@ -336,10 +332,11 @@ async function innertubePlaylist(playlistId) {
 
     // Extract the playlist title (only present on the first response)
     if (title === playlistId) {
-      title = data?.metadata?.playlistMetadataRenderer?.title
-           || data?.header?.playlistHeaderRenderer?.title?.simpleText
-           || data?.header?.pageHeaderRenderer?.pageTitle
-           || playlistId;
+      title =
+        data?.metadata?.playlistMetadataRenderer?.title ||
+        data?.header?.playlistHeaderRenderer?.title?.simpleText ||
+        data?.header?.pageHeaderRenderer?.pageTitle ||
+        playlistId;
     }
 
     // Recursively find every playlistVideoRenderer anywhere in the response.
@@ -356,7 +353,7 @@ async function innertubePlaylist(playlistId) {
 
     // Look for a continuation token to fetch the next page
     const continuations = findAll(data, 'continuationCommand');
-    const token = continuations.find(c => c.token)?.token;
+    const token = continuations.find((c) => c.token)?.token;
     if (!token) break;
     payload = { continuation: token };
   }
@@ -386,7 +383,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // (e.g. users in different regions) pacing is best-effort — the retry-on-429
 // below catches any leakage.
 let supadataNextCallAt = 0;
-const SUPADATA_MIN_INTERVAL_MS = 1100;  // 1s limit + 100ms safety margin
+const SUPADATA_MIN_INTERVAL_MS = 1100; // 1s limit + 100ms safety margin
 
 async function paceSupadata() {
   // Reserve our slot BEFORE awaiting. By computing and writing supadataNextCallAt
@@ -417,13 +414,17 @@ async function supadataRequest(path, apiKey, retries = 3) {
 
     // Capture body for diagnosis
     let body = '';
-    try { body = await res.text(); } catch (e) {}
+    try {
+      body = await res.text();
+    } catch (e) {}
     const detail = body ? ': ' + body.slice(0, 200) : '';
 
     // Retry on 429 (rate limit slipped through) and 5xx (transient). Don't retry on other 4xx.
     if (res.status === 429 || res.status >= 500) {
-      const wait = 1000 * Math.pow(2, attempt) + Math.random() * 250;  // 1s, 2s, 4s + jitter
-      console.log(`[supadata] ${path} returned ${res.status}, retrying in ${Math.round(wait)}ms (attempt ${attempt + 1}/${retries})`);
+      const wait = 1000 * Math.pow(2, attempt) + Math.random() * 250; // 1s, 2s, 4s + jitter
+      console.log(
+        `[supadata] ${path} returned ${res.status}, retrying in ${Math.round(wait)}ms (attempt ${attempt + 1}/${retries})`,
+      );
       lastErr = new Error(`Supadata ${path} returned ${res.status}${detail}`);
       await sleep(wait);
       continue;
@@ -447,10 +448,12 @@ async function supadataTranscript(videoId, apiKey) {
   }
 
   // Supadata uses `offset` (ms) and `duration` (ms); convert to our `start` (seconds).
-  const segments = (transcript.content || []).map((s) => ({
-    start: (s.offset || 0) / 1000,
-    text: (s.text || '').replace(/\n/g, ' ').trim(),
-  })).filter((s) => s.text);
+  const segments = (transcript.content || [])
+    .map((s) => ({
+      start: (s.offset || 0) / 1000,
+      text: (s.text || '').replace(/\n/g, ' ').trim(),
+    }))
+    .filter((s) => s.text);
 
   if (!segments.length) throw new Error('Supadata returned an empty transcript');
 
@@ -459,7 +462,7 @@ async function supadataTranscript(videoId, apiKey) {
     title: video?.title || videoId,
     author: video?.channel?.name || '',
     language: transcript.lang || 'unknown',
-    kind: 'unknown',  // Supadata doesn't distinguish auto vs manual
+    kind: 'unknown', // Supadata doesn't distinguish auto vs manual
     segments,
   };
 }
@@ -540,7 +543,9 @@ async function callInnerTubeWithClient(client, path, payload) {
   const videoTitle = data?.videoDetails?.title;
 
   if (path.includes('/player')) {
-    console.log(`[${client.name}] ${requestId} status=${playabilityStatus} title="${videoTitle?.slice(0, 40)}" captions=${hasCaptions} tracks=${trackCount}`);
+    console.log(
+      `[${client.name}] ${requestId} status=${playabilityStatus} title="${videoTitle?.slice(0, 40)}" captions=${hasCaptions} tracks=${trackCount}`,
+    );
   }
 
   if (playabilityStatus && playabilityStatus !== 'OK') {
@@ -581,7 +586,11 @@ async function fetchCaptions(captionUrl) {
     const out = [];
     for (const ev of data.events || []) {
       if (!ev.segs) continue;
-      const text = ev.segs.map(s => s.utf8 || '').join('').replace(/\n/g, ' ').trim();
+      const text = ev.segs
+        .map((s) => s.utf8 || '')
+        .join('')
+        .replace(/\n/g, ' ')
+        .trim();
       if (text) out.push({ start: (ev.tStartMs || 0) / 1000, text });
     }
     console.log(`[captions] parsed ${out.length} JSON segments`);
@@ -634,11 +643,13 @@ const NAMED_ENTITIES = {
 function decodeXmlEntities(s) {
   return s.replace(/&(#x[0-9a-fA-F]+|#[0-9]+|[a-zA-Z]+);/g, (match, body) => {
     if (body[0] === '#') {
-      const code = body[1] === 'x' || body[1] === 'X'
-        ? parseInt(body.slice(2), 16)
-        : parseInt(body.slice(1), 10);
-      if (Number.isFinite(code) && code >= 0 && code <= 0x10FFFF) {
-        try { return String.fromCodePoint(code); } catch (e) { return match; }
+      const code = body[1] === 'x' || body[1] === 'X' ? parseInt(body.slice(2), 16) : parseInt(body.slice(1), 10);
+      if (Number.isFinite(code) && code >= 0 && code <= 0x10ffff) {
+        try {
+          return String.fromCodePoint(code);
+        } catch (e) {
+          return match;
+        }
       }
       return match;
     }
@@ -678,18 +689,24 @@ function json(body, status = 200) {
 function serveHTML(request, env) {
   const user = request.headers.get('Cf-Access-Authenticated-User-Email') || '';
   const provider = getProvider(env).name;
-  const html = HTML
-    .replace('__USER_EMAIL__', escapeHtml(user))
-    .replace('__PROVIDER__', escapeHtml(provider));
+  const html = HTML.replace('__USER_EMAIL__', escapeHtml(user)).replace('__PROVIDER__', escapeHtml(provider));
   return new Response(html, {
     headers: { 'Content-Type': 'text/html; charset=utf-8' },
   });
 }
 
 function escapeHtml(s) {
-  return s.replace(/[&<>"']/g, c => ({
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
-  }[c]));
+  return s.replace(
+    /[&<>"']/g,
+    (c) =>
+      ({
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        '"': '&quot;',
+        "'": '&#39;',
+      })[c],
+  );
 }
 
 const HTML = `<!DOCTYPE html>
