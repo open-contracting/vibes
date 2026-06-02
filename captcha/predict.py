@@ -22,8 +22,8 @@ import base64
 import binascii
 import io
 import sys
+from functools import cache
 from pathlib import Path
-from typing import Union
 
 import numpy as np
 import torch
@@ -38,27 +38,27 @@ from manage import (
 )
 from PIL import Image
 
-ImageInput = Union[str, bytes, Path, Image.Image, np.ndarray]
+ImageInput = str | bytes | Path | Image.Image | np.ndarray
 DEFAULT_MODEL_PATH = Path(__file__).parent / "captcha_cnn.pt"
 
-_model: TinyCNN | None = None
-_device: torch.device | None = None
+RGB_NDIM = 3  # height, width, channel axes
+RGB_CHANNELS = 3
+MAX_PATH_LEN = 260  # paths longer than this can't be filesystem paths, so treat as base64
 
 
+@cache
 def _get_model(model_path: Path = DEFAULT_MODEL_PATH) -> tuple[TinyCNN, torch.device]:
-    global _model, _device
-    if _model is None:
-        _device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        _model = TinyCNN()
-        _model.load_state_dict(torch.load(model_path, map_location=_device))
-        _model.to(_device).eval()
-    return _model, _device  # type: ignore[return-value]
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = TinyCNN()
+    model.load_state_dict(torch.load(model_path, map_location=device))
+    model.to(device).eval()
+    return model, device
 
 
 def _to_rgb(image: ImageInput) -> np.ndarray:
     """Coerce any supported input into an HxWx3 uint8 array composited over white."""
     if isinstance(image, np.ndarray):
-        if image.ndim == 3 and image.shape[2] == 3 and image.dtype == np.uint8:
+        if image.ndim == RGB_NDIM and image.shape[2] == RGB_CHANNELS and image.dtype == np.uint8:
             return image
         pil = Image.fromarray(image)
     elif isinstance(image, Image.Image):
@@ -79,7 +79,7 @@ def _to_rgb(image: ImageInput) -> np.ndarray:
 
 def _looks_like_path(s: str) -> bool:
     # Treat anything short with a known image suffix or an existing file as a path.
-    if len(s) < 260 and (s.endswith((".png", ".jpg", ".jpeg"))):
+    if len(s) < MAX_PATH_LEN and (s.endswith((".png", ".jpg", ".jpeg"))):
         return True
     return Path(s).exists()
 

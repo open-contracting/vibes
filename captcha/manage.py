@@ -29,6 +29,7 @@ from pathlib import Path
 
 import click
 import numpy as np
+import requests
 import torch
 import torch.nn.functional as F
 from bs4 import BeautifulSoup
@@ -51,10 +52,17 @@ NUM_CLASSES = len(ALPHABET)
 N_CHARS = 6
 CROP_H = 40
 CROP_W = 28
+PAIR_LEN = 2  # a --pair option names exactly two characters
 
 CHROMA_MAX = 30
 INTENSITY_MAX = 140
-MIN_GLYPH_HEIGHT = 15  # letter bboxes are ~25–35 tall; noise blobs are ~4–8
+TEXT_GRAY_MAX = 200  # pixels darker than this count as text
+
+# Data augmentation probabilities.
+PEPPER_PROB = 0.5
+SALT_PROB = 0.3
+NOISE_FRACTION = 0.01
+MIN_GLYPH_HEIGHT = 15  # letter bboxes are ~25-35 tall; noise blobs are ~4-8
 
 DEFAULT_LABELS = HERE / "labels.json"
 DEFAULT_SAMPLES = HERE / "samples"
@@ -96,7 +104,7 @@ def clean(rgb: np.ndarray) -> np.ndarray:
 
 def text_bbox(gray: np.ndarray) -> tuple[int, int]:
     """Return the (left, right) columns spanning all text pixels."""
-    cols = (gray < 200).any(axis=0)
+    cols = (gray < TEXT_GRAY_MAX).any(axis=0)
     if not cols.any():
         return 0, gray.shape[1]
     xs = np.flatnonzero(cols)
@@ -207,9 +215,10 @@ def build_items(labels: dict[str, str], samples_dir: Path) -> list[tuple[Path, i
 
 
 class CharDataset(Dataset):
-    def __init__(self, items: list[tuple[Path, int, str]], augment: bool = False) -> None:
+    def __init__(self, items: list[tuple[Path, int, str]], *, augment: bool = False, seed: int | None = None) -> None:
         self.items = items
         self.augment = augment
+        self.rng = np.random.default_rng(seed)
 
     def __len__(self) -> int:
         return len(self.items)
@@ -227,13 +236,13 @@ class CharDataset(Dataset):
 
     def _augment(self, crop: np.ndarray) -> np.ndarray:
         img = Image.fromarray(crop)
-        angle = random.uniform(-8, 8)
+        angle = self.rng.uniform(-8, 8)
         img = img.rotate(angle, fillcolor=255, resample=Image.BILINEAR)
         arr = np.array(img)
-        if random.random() < 0.5:
-            arr[np.random.rand(*arr.shape) < 0.01] = 0
-        if random.random() < 0.3:
-            arr[np.random.rand(*arr.shape) < 0.01] = 255
+        if self.rng.random() < PEPPER_PROB:
+            arr[self.rng.random(arr.shape) < NOISE_FRACTION] = 0
+        if self.rng.random() < SALT_PROB:
+            arr[self.rng.random(arr.shape) < NOISE_FRACTION] = 255
         return arr
 
 
@@ -280,13 +289,16 @@ def fit_one(
     device: torch.device,
     save_best_to: Path | None,
     log_prefix: str = "",
+    seed: int | None = None,
 ) -> tuple[TinyCNN, float, int]:
     """
-    Train one model. If save_best_to is set and val_items is non-empty,
-    save the best-by-val-acc checkpoint. Returns (model, best_val_acc, best_epoch).
+    Train one model.
+
+    If save_best_to is set and val_items is non-empty, save the best-by-val-acc
+    checkpoint. Returns (model, best_val_acc, best_epoch).
     """
     train_dl = DataLoader(
-        CharDataset(train_items, augment=True),
+        CharDataset(train_items, augment=True, seed=seed),
         batch_size=batch_size,
         shuffle=True,
         num_workers=0,
@@ -310,15 +322,15 @@ def fit_one(
         model.train()
         train_correct = train_total = train_loss = 0
         for x, y in train_dl:
-            x, y = x.to(device), y.to(device)
-            logits = model(x)
-            loss = F.cross_entropy(logits, y)
+            xb, yb = x.to(device), y.to(device)
+            logits = model(xb)
+            loss = F.cross_entropy(logits, yb)
             opt.zero_grad()
             loss.backward()
             opt.step()
-            train_loss += loss.item() * x.size(0)
-            train_correct += (logits.argmax(1) == y).sum().item()
-            train_total += x.size(0)
+            train_loss += loss.item() * xb.size(0)
+            train_correct += (logits.argmax(1) == yb).sum().item()
+            train_total += xb.size(0)
         sched.step()
         val_acc = None
         marker = ""
@@ -327,9 +339,9 @@ def fit_one(
             v_correct = v_total = 0
             with torch.no_grad():
                 for x, y in val_dl:
-                    x, y = x.to(device), y.to(device)
-                    v_correct += (model(x).argmax(1) == y).sum().item()
-                    v_total += x.size(0)
+                    xb, yb = x.to(device), y.to(device)
+                    v_correct += (model(xb).argmax(1) == yb).sum().item()
+                    v_total += xb.size(0)
             val_acc = v_correct / v_total
             if val_acc > best_val:
                 best_val = val_acc
@@ -501,8 +513,6 @@ def _fetch_b64(html: bytes) -> str:
 )
 def fetch(n: int, start: int, output_dir: Path, delay: float) -> None:
     """Download N captchas from the Assam tenders portal."""
-    import requests
-
     if n < 1 or start < 1:
         raise click.BadParameter("n and --start must be >= 1")
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -665,7 +675,6 @@ def train(
 ) -> None:
     """Train the CNN. Saves the best-by-val checkpoint to --out."""
     random.seed(seed)
-    np.random.seed(seed)
     torch.manual_seed(seed)
     labels = json.loads(labels_path.read_text())
     items = build_items(labels, samples)
@@ -683,6 +692,7 @@ def train(
         batch_size=batch_size,
         device=device,
         save_best_to=out,
+        seed=seed,
     )
     click.echo(f"best val acc {best_val:.3f} at epoch {best_epoch}; saved to {out}")
 
@@ -759,6 +769,7 @@ def xval(
     folds: int,
     epochs: int,
     seed: int,
+    *,
     report_only: bool,
 ) -> None:
     """K-fold cross-validation; write suspects.txt + suspects.png."""
@@ -774,7 +785,6 @@ def xval(
 
     started = time.monotonic()
     random.seed(seed)
-    np.random.seed(seed)
     torch.manual_seed(seed)
     fnames = sorted(labels)
     random.shuffle(fnames)
@@ -785,7 +795,7 @@ def xval(
     predictions: dict[tuple[str, int], tuple[str, float]] = {}
     for fi, val_fnames in enumerate(fold_groups, 1):
         val_set = set(val_fnames)
-        train_labels = {f: l for f, l in labels.items() if f not in val_set}
+        train_labels = {f: lbl for f, lbl in labels.items() if f not in val_set}
         train_items = build_items(train_labels, samples)
         click.echo(f"Fold {fi}/{folds}: training on {len(train_items)} chars, val {len(val_fnames)} captchas")
         model, _, _ = fit_one(
@@ -798,6 +808,7 @@ def xval(
             device=device,
             save_best_to=None,
             log_prefix=f"  fold {fi}/{folds} ",
+            seed=seed + fi,
         )
         model.eval()
         with torch.no_grad():
@@ -1002,6 +1013,7 @@ def review(
     min_conf: float,
     max_conf: float,
     start: int,
+    *,
     no_image: bool,
     scale: int,
     term_rows: int,
@@ -1013,7 +1025,7 @@ def review(
     pair_chars: set[frozenset[str]] | None = None
     if pair:
         parts = [p.strip() for p in pair.split(",")]
-        if len(parts) != 2 or any(len(p) != 1 for p in parts):
+        if len(parts) != PAIR_LEN or any(len(p) != 1 for p in parts):
             raise click.BadParameter(f"--pair must be two characters separated by a comma, e.g. n,h (got {pair!r})")
         pair_chars = {frozenset(parts)}
     suspects = parse_suspects(suspects_path)
@@ -1147,6 +1159,7 @@ def verify(
     labels_path: Path,
     samples: Path,
     start: int,
+    *,
     no_image: bool,
     scale: int,
     term_rows: int,
@@ -1270,9 +1283,9 @@ def verify(
     is_flag=True,
     help="Also print the model's per-character softmax confidence.",
 )
-def predict_cmd(image_path: Path, model: Path, confidence: bool) -> None:
+def predict_cmd(image_path: Path, model: Path, *, confidence: bool) -> None:
     """Predict a captcha's text. (Library API: import from predict.py.)."""
-    from predict import predict, predict_with_confidence  # local import; avoids cycle
+    from predict import predict, predict_with_confidence  # noqa: PLC0415  # local import to avoid cycle
 
     if confidence:
         text, conf = predict_with_confidence(image_path, model)
