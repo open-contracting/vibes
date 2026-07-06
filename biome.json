@@ -6,9 +6,6 @@
     "useIgnoreFile": true,
     "defaultBranch": "main"
   },
-  "files": {
-    "includes": ["**", "!netherlands_ocds_transformer"]
-  },
   "assist": {
     "actions": {
       "source": {
