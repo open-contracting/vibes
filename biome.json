@@ -5,6 +5,9 @@
     "useIgnoreFile": true,
     "defaultBranch": "main"
   },
+  "files": {
+    "includes": ["**", "!editor-tools/js/vendor"]
+  },
   "assist": {
     "actions": {
       "source": {

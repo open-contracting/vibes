@@ -1,0 +1,21 @@
+body {
+  padding-top: 2em;
+}
+.twitter-typeahead {
+  width: 100%;
+}
+.tt-dataset {
+  margin-top: 1em;
+}
+dl {
+  margin-bottom: 0;
+}
+.dl-horizontal dt {
+  width: 6em;
+}
+.dl-horizontal dd {
+  margin-left: 7em;
+}
+.tt-highlight {
+  background-color: #ff6;
+}
