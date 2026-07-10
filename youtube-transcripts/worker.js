@@ -13,7 +13,7 @@
  *   wrangler deploy
  */
 
-const ALLOWED_HOSTS = new Set(['www.youtube.com', 'youtube.com', 'm.youtube.com']);
+const ALLOWED_HOSTS = new Set(["www.youtube.com", "youtube.com", "m.youtube.com"]);
 
 // InnerTube clients to try, in order. Order matters: we put clients that tolerate
 // anonymous datacenter IPs (like Cloudflare Worker egress) first.
@@ -28,35 +28,35 @@ const ALLOWED_HOSTS = new Set(['www.youtube.com', 'youtube.com', 'm.youtube.com'
 //   curl -A 'Mozilla/5.0' https://www.youtube.com/watch?v=dQw4w9WgXcQ | grep -o 'INNERTUBE_API_KEY":"[^"]*'
 const INNERTUBE_CLIENTS = [
   {
-    name: 'TVHTML5_EMBED',
-    apiKey: 'AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8',
+    name: "TVHTML5_EMBED",
+    apiKey: "AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8",
     context: {
       client: {
-        clientName: 'TVHTML5_SIMPLY_EMBEDDED_PLAYER',
-        clientVersion: '2.0',
-        clientScreen: 'EMBED',
+        clientName: "TVHTML5_SIMPLY_EMBEDDED_PLAYER",
+        clientVersion: "2.0",
+        clientScreen: "EMBED",
       },
-      thirdParty: { embedUrl: 'https://www.youtube.com/' },
+      thirdParty: { embedUrl: "https://www.youtube.com/" },
     },
-    userAgent: 'Mozilla/5.0 (PlayStation; PlayStation 4/12.00) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0',
+    userAgent: "Mozilla/5.0 (PlayStation; PlayStation 4/12.00) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0",
   },
   {
-    name: 'IOS',
-    apiKey: 'AIzaSyB-63vPrdThhKuerbB2N_l7Kwwcxj6yUAc',
-    context: { client: { clientName: 'IOS', clientVersion: '20.10.4', deviceModel: 'iPhone16,2' } },
-    userAgent: 'com.google.ios.youtube/20.10.4 (iPhone16,2; U; CPU iOS 18_3_2 like Mac OS X;)',
+    name: "IOS",
+    apiKey: "AIzaSyB-63vPrdThhKuerbB2N_l7Kwwcxj6yUAc",
+    context: { client: { clientName: "IOS", clientVersion: "20.10.4", deviceModel: "iPhone16,2" } },
+    userAgent: "com.google.ios.youtube/20.10.4 (iPhone16,2; U; CPU iOS 18_3_2 like Mac OS X;)",
   },
   {
-    name: 'ANDROID',
-    apiKey: 'AIzaSyA8eiZmM1FaDVjRy-df2KTyQ_vz_yYM39w',
-    context: { client: { clientName: 'ANDROID', clientVersion: '20.10.38', androidSdkVersion: 30 } },
-    userAgent: 'com.google.android.youtube/20.10.38 (Linux; U; Android 11) gzip',
+    name: "ANDROID",
+    apiKey: "AIzaSyA8eiZmM1FaDVjRy-df2KTyQ_vz_yYM39w",
+    context: { client: { clientName: "ANDROID", clientVersion: "20.10.38", androidSdkVersion: 30 } },
+    userAgent: "com.google.android.youtube/20.10.38 (Linux; U; Android 11) gzip",
   },
   {
-    name: 'WEB',
-    apiKey: 'AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8',
-    context: { client: { clientName: 'WEB', clientVersion: '2.20240101.00.00' } },
-    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+    name: "WEB",
+    apiKey: "AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8",
+    context: { client: { clientName: "WEB", clientVersion: "2.20240101.00.00" } },
+    userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
   },
 ];
 
@@ -66,19 +66,19 @@ export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
 
-    if (url.pathname === '/' || url.pathname === '/index.html') {
+    if (url.pathname === "/" || url.pathname === "/index.html") {
       return serveHTML(request, env);
     }
-    if (url.pathname === '/api/transcript') {
-      return handleTranscript(url.searchParams.get('v'), request, env, ctx);
+    if (url.pathname === "/api/transcript") {
+      return handleTranscript(url.searchParams.get("v"), request, env, ctx);
     }
-    if (url.pathname === '/api/playlist') {
-      return handlePlaylist(url.searchParams.get('list'), request, env, ctx);
+    if (url.pathname === "/api/playlist") {
+      return handlePlaylist(url.searchParams.get("list"), request, env, ctx);
     }
-    if (url.pathname === '/api/credits') {
+    if (url.pathname === "/api/credits") {
       return handleCredits(env);
     }
-    return new Response('Not found', { status: 404 });
+    return new Response("Not found", { status: 404 });
   },
 };
 
@@ -86,25 +86,25 @@ export default {
 // (development mode), letting the UI hide the credits display.
 async function handleCredits(env) {
   if (!env || !env.SUPADATA_API_KEY) {
-    return json({ provider: 'innertube' });
+    return json({ provider: "innertube" });
   }
   try {
     await paceSupadata(); // Share the rate-limit gate with transcript calls
-    const res = await fetch('https://api.supadata.ai/v1/me', {
-      headers: { 'x-api-key': env.SUPADATA_API_KEY },
+    const res = await fetch("https://api.supadata.ai/v1/me", {
+      headers: { "x-api-key": env.SUPADATA_API_KEY },
     });
     if (!res.ok) {
-      return json({ provider: 'supadata', error: `HTTP ${res.status}` });
+      return json({ provider: "supadata", error: `HTTP ${res.status}` });
     }
     const data = await res.json();
     return json({
-      provider: 'supadata',
+      provider: "supadata",
       plan: data.plan,
       used: data.usedCredits,
       max: data.maxCredits,
     });
   } catch (e) {
-    return json({ provider: 'supadata', error: e.message });
+    return json({ provider: "supadata", error: e.message });
   }
 }
 
@@ -116,13 +116,13 @@ async function handleCredits(env) {
 function getProvider(env) {
   if (env?.SUPADATA_API_KEY) {
     return {
-      name: 'supadata',
+      name: "supadata",
       fetchTranscriptForVideo: (id) => supadataTranscript(id, env.SUPADATA_API_KEY),
       getPlaylistVideos: (id) => supadataPlaylist(id, env.SUPADATA_API_KEY),
     };
   }
   return {
-    name: 'innertube',
+    name: "innertube",
     fetchTranscriptForVideo: innertubeTranscript,
     getPlaylistVideos: innertubePlaylist,
   };
@@ -140,7 +140,7 @@ async function cachedOrFetch(env, ctx, key, ttlSeconds, fetchFn) {
   const kv = env?.CACHE;
   if (kv) {
     try {
-      const hit = await kv.get(key, 'json');
+      const hit = await kv.get(key, "json");
       if (hit) {
         console.log(`[cache] HIT ${key}`);
         return { data: hit, cached: true };
@@ -173,10 +173,10 @@ async function cachedOrFetch(env, ctx, key, ttlSeconds, fetchFn) {
 
 async function handleTranscript(videoId, request, env, ctx) {
   if (!videoId || !/^[a-zA-Z0-9_-]{11}$/.test(videoId)) {
-    return json({ error: 'Invalid or missing video ID' }, 400);
+    return json({ error: "Invalid or missing video ID" }, 400);
   }
   const provider = getProvider(env);
-  const user = request.headers.get('Cf-Access-Authenticated-User-Email');
+  const user = request.headers.get("Cf-Access-Authenticated-User-Email");
   if (user) console.log(`Transcript [${provider.name}]: ${videoId} by ${user}`);
 
   try {
@@ -194,19 +194,19 @@ async function handleTranscript(videoId, request, env, ctx) {
 }
 
 async function innertubeTranscript(videoId) {
-  const playerData = await callInnerTube('/youtubei/v1/player', { videoId });
+  const playerData = await callInnerTube("/youtubei/v1/player", { videoId });
 
   const tracks = playerData?.captions?.playerCaptionsTracklistRenderer?.captionTracks || [];
   const title = playerData?.videoDetails?.title || videoId;
-  const author = playerData?.videoDetails?.author || '';
+  const author = playerData?.videoDetails?.author || "";
 
   if (!tracks.length) {
     throw new Error(`No captions available for "${title}"`);
   }
 
   const track =
-    tracks.find((t) => t.languageCode === 'en' && t.kind !== 'asr') ||
-    tracks.find((t) => t.languageCode?.startsWith('en')) ||
+    tracks.find((t) => t.languageCode === "en" && t.kind !== "asr") ||
+    tracks.find((t) => t.languageCode?.startsWith("en")) ||
     tracks[0];
 
   const captionUrl = setFmtJson3(track.baseUrl);
@@ -217,7 +217,7 @@ async function innertubeTranscript(videoId) {
     title,
     author,
     language: track.languageCode,
-    kind: track.kind === 'asr' ? 'auto' : 'manual',
+    kind: track.kind === "asr" ? "auto" : "manual",
     segments,
   };
 }
@@ -226,10 +226,10 @@ async function innertubeTranscript(videoId) {
 
 async function handlePlaylist(playlistId, request, env, ctx) {
   if (!playlistId || !/^[a-zA-Z0-9_-]{10,}$/.test(playlistId)) {
-    return json({ error: 'Invalid or missing playlist ID' }, 400);
+    return json({ error: "Invalid or missing playlist ID" }, 400);
   }
   const provider = getProvider(env);
-  const user = request.headers.get('Cf-Access-Authenticated-User-Email');
+  const user = request.headers.get("Cf-Access-Authenticated-User-Email");
   if (user) console.log(`Playlist [${provider.name}]: ${playlistId} by ${user}`);
 
   try {
@@ -244,7 +244,7 @@ async function handlePlaylist(playlistId, request, env, ctx) {
     const { title: playlistTitle, videos } = playlistData;
 
     if (!videos.length) {
-      return json({ error: 'Playlist is empty or unavailable' }, 404);
+      return json({ error: "Playlist is empty or unavailable" }, 404);
     }
 
     // Subrequest budget concerns differ by provider:
@@ -253,7 +253,7 @@ async function handlePlaylist(playlistId, request, env, ctx) {
     // - Supadata: 1 outbound subrequest per video, no client-retry chains.
     //   Workers limit allows ~45 videos; Supadata's free tier is the harder cap.
     // Caching reduces real cost: only fresh videos hit the provider.
-    const limit = provider.name === 'supadata' ? 45 : 15;
+    const limit = provider.name === "supadata" ? 45 : 15;
     const truncated = videos.length > limit;
     const toProcess = videos;
 
@@ -261,7 +261,7 @@ async function handlePlaylist(playlistId, request, env, ctx) {
     // - Supadata free tier rate-limits concurrent requests, so process one at a time.
     // - InnerTube has no such constraint; parallel is much faster.
     // For both, the cache short-circuits already-fetched videos at near-zero cost.
-    const concurrency = provider.name === 'supadata' ? 1 : PLAYLIST_CONCURRENCY;
+    const concurrency = provider.name === "supadata" ? 1 : PLAYLIST_CONCURRENCY;
 
     let cacheHits = 0;
     const results = await parallelMap(toProcess, concurrency, async (video) => {
@@ -283,7 +283,7 @@ async function handlePlaylist(playlistId, request, env, ctx) {
     });
 
     console.log(
-      `Playlist ${playlistId}: ${cacheHits}/${results.length} from cache (playlist enum: ${playlistCached ? 'cached' : 'fresh'})`,
+      `Playlist ${playlistId}: ${cacheHits}/${results.length} from cache (playlist enum: ${playlistCached ? "cached" : "fresh"})`,
     );
 
     return json({
@@ -320,7 +320,7 @@ async function innertubePlaylist(playlistId) {
   // Use the WEB client specifically for playlist enumeration. WEB returns more
   // videos per page than ANDROID and its response shape is more predictable.
   // Playlists aren't rate-limit-sensitive the way player calls are.
-  const webClient = INNERTUBE_CLIENTS.find((c) => c.name === 'WEB');
+  const webClient = INNERTUBE_CLIENTS.find((c) => c.name === "WEB");
 
   const allVideos = [];
   let title = playlistId;
@@ -328,7 +328,7 @@ async function innertubePlaylist(playlistId) {
   let safetyLimit = 10; // up to ~1000 videos via continuation pagination
 
   while (safetyLimit-- > 0) {
-    const data = await callInnerTubeWithClient(webClient, '/youtubei/v1/browse', payload);
+    const data = await callInnerTubeWithClient(webClient, "/youtubei/v1/browse", payload);
 
     // Extract the playlist title (only present on the first response)
     if (title === playlistId) {
@@ -342,7 +342,7 @@ async function innertubePlaylist(playlistId) {
     // Recursively find every playlistVideoRenderer anywhere in the response.
     // More resilient than walking specific paths, which vary across clients
     // and YouTube layout changes.
-    const videoNodes = findAll(data, 'playlistVideoRenderer');
+    const videoNodes = findAll(data, "playlistVideoRenderer");
     for (const r of videoNodes) {
       if (!r?.videoId) continue;
       allVideos.push({
@@ -352,7 +352,7 @@ async function innertubePlaylist(playlistId) {
     }
 
     // Look for a continuation token to fetch the next page
-    const continuations = findAll(data, 'continuationCommand');
+    const continuations = findAll(data, "continuationCommand");
     const token = continuations.find((c) => c.token)?.token;
     if (!token) break;
     payload = { continuation: token };
@@ -369,7 +369,7 @@ async function innertubePlaylist(playlistId) {
 // sequential paths only, with retry-on-429 below.
 // https://docs.supadata.ai
 
-const SUPADATA_BASE = 'https://api.supadata.ai/v1';
+const SUPADATA_BASE = "https://api.supadata.ai/v1";
 
 // Sleep helper for backoff delays
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -407,17 +407,17 @@ async function supadataRequest(path, apiKey, retries = 3) {
     await paceSupadata();
 
     const res = await fetch(SUPADATA_BASE + path, {
-      headers: { 'x-api-key': apiKey },
+      headers: { "x-api-key": apiKey },
     });
 
     if (res.ok) return res.json();
 
     // Capture body for diagnosis
-    let body = '';
+    let body = "";
     try {
       body = await res.text();
     } catch {}
-    const detail = body ? `: ${body.slice(0, 200)}` : '';
+    const detail = body ? `: ${body.slice(0, 200)}` : "";
 
     // Retry on 429 (rate limit slipped through) and 5xx (transient). Don't retry on other 4xx.
     if (res.status === 429 || res.status >= 500) {
@@ -451,18 +451,18 @@ async function supadataTranscript(videoId, apiKey) {
   const segments = (transcript.content || [])
     .map((s) => ({
       start: (s.offset || 0) / 1000,
-      text: (s.text || '').replace(/\n/g, ' ').trim(),
+      text: (s.text || "").replace(/\n/g, " ").trim(),
     }))
     .filter((s) => s.text);
 
-  if (!segments.length) throw new Error('Supadata returned an empty transcript');
+  if (!segments.length) throw new Error("Supadata returned an empty transcript");
 
   return {
     videoId,
     title: video?.title || videoId,
-    author: video?.channel?.name || '',
-    language: transcript.lang || 'unknown',
-    kind: 'unknown', // Supadata doesn't distinguish auto vs manual
+    author: video?.channel?.name || "",
+    language: transcript.lang || "unknown",
+    kind: "unknown", // Supadata doesn't distinguish auto vs manual
     segments,
   };
 }
@@ -493,7 +493,7 @@ async function supadataPlaylist(playlistId, apiKey) {
 function findAll(node, keyName) {
   const out = [];
   function walk(v) {
-    if (!v || typeof v !== 'object') return;
+    if (!v || typeof v !== "object") return;
     if (Array.isArray(v)) {
       for (const item of v) walk(item);
       return;
@@ -512,23 +512,23 @@ function findAll(node, keyName) {
 // Single attempt with a specific client. Throws on failure.
 async function callInnerTubeWithClient(client, path, payload) {
   const url = `https://www.youtube.com${path}?key=${client.apiKey}&prettyPrint=false`;
-  const requestId = (payload.videoId || payload.browseId || 'continuation').toString().slice(0, 20);
+  const requestId = (payload.videoId || payload.browseId || "continuation").toString().slice(0, 20);
   console.log(`[${client.name}] ${path} → ${requestId}`);
 
   const res = await safeFetch(url, {
-    method: 'POST',
+    method: "POST",
     headers: {
-      'Content-Type': 'application/json',
-      'User-Agent': client.userAgent,
-      'X-Youtube-Client-Name': client.context.client.clientName,
-      'X-Youtube-Client-Version': client.context.client.clientVersion,
+      "Content-Type": "application/json",
+      "User-Agent": client.userAgent,
+      "X-Youtube-Client-Name": client.context.client.clientName,
+      "X-Youtube-Client-Version": client.context.client.clientVersion,
     },
     body: JSON.stringify({ context: client.context, ...payload }),
   });
 
   if (!res.ok) {
     // Log a short snippet of body for diagnosis (often HTML error page from YouTube edge)
-    const snippet = (await res.text()).slice(0, 200).replace(/\s+/g, ' ');
+    const snippet = (await res.text()).slice(0, 200).replace(/\s+/g, " ");
     console.log(`[${client.name}] HTTP ${res.status}: ${snippet}`);
     throw new Error(`${client.name}: HTTP ${res.status}`);
   }
@@ -542,13 +542,13 @@ async function callInnerTubeWithClient(client, path, payload) {
   const reason = data?.playabilityStatus?.reason;
   const videoTitle = data?.videoDetails?.title;
 
-  if (path.includes('/player')) {
+  if (path.includes("/player")) {
     console.log(
       `[${client.name}] ${requestId} status=${playabilityStatus} title="${videoTitle?.slice(0, 40)}" captions=${hasCaptions} tracks=${trackCount}`,
     );
   }
 
-  if (playabilityStatus && playabilityStatus !== 'OK') {
+  if (playabilityStatus && playabilityStatus !== "OK") {
     throw new Error(`${client.name}: ${reason || playabilityStatus}`);
   }
   return data;
@@ -565,12 +565,12 @@ async function callInnerTube(path, payload) {
       errors.push(e.message);
     }
   }
-  throw new Error(`All InnerTube clients failed. ${errors.join('; ')}`);
+  throw new Error(`All InnerTube clients failed. ${errors.join("; ")}`);
 }
 
 async function fetchCaptions(captionUrl) {
   const res = await safeFetch(captionUrl, {
-    headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
+    headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" },
   });
   if (!res.ok) {
     console.log(`[captions] HTTP ${res.status} from ${new URL(captionUrl).pathname}`);
@@ -581,15 +581,15 @@ async function fetchCaptions(captionUrl) {
   console.log(`[captions] ${body.length} bytes, starts with "${trimmed.slice(0, 20)}"`);
 
   // JSON3 path (preferred)
-  if (trimmed.startsWith('{')) {
+  if (trimmed.startsWith("{")) {
     const data = JSON.parse(trimmed);
     const out = [];
     for (const ev of data.events || []) {
       if (!ev.segs) continue;
       const text = ev.segs
-        .map((s) => s.utf8 || '')
-        .join('')
-        .replace(/\n/g, ' ')
+        .map((s) => s.utf8 || "")
+        .join("")
+        .replace(/\n/g, " ")
         .trim();
       if (text) out.push({ start: (ev.tStartMs || 0) / 1000, text });
     }
@@ -598,13 +598,13 @@ async function fetchCaptions(captionUrl) {
   }
 
   // XML fallback (srv1/srv3) — older format YouTube still returns sometimes
-  if (trimmed.startsWith('<')) {
+  if (trimmed.startsWith("<")) {
     const out = parseCaptionXml(trimmed);
     console.log(`[captions] parsed ${out.length} XML segments`);
     return out;
   }
 
-  throw new Error('Caption response was neither JSON nor XML');
+  throw new Error("Caption response was neither JSON nor XML");
 }
 
 function parseCaptionXml(xml) {
@@ -612,7 +612,7 @@ function parseCaptionXml(xml) {
   const re = /<text[^>]*\bstart="([^"]+)"[^>]*>([\s\S]*?)<\/text>/g;
   let m = re.exec(xml);
   while (m !== null) {
-    const text = decodeXmlEntities(stripTags(m[2])).replace(/\n/g, ' ').trim();
+    const text = decodeXmlEntities(stripTags(m[2])).replace(/\n/g, " ").trim();
     if (text) out.push({ start: parseFloat(m[1]), text });
     m = re.exec(xml);
   }
@@ -625,7 +625,7 @@ function stripTags(s) {
   let prev;
   do {
     prev = s;
-    s = s.replace(/<[^>]*>/g, '');
+    s = s.replace(/<[^>]*>/g, "");
   } while (s !== prev);
   return s;
 }
@@ -634,17 +634,17 @@ function stripTags(s) {
 // (rather than being re-decoded into "<"). Chained .replace() calls would
 // double-unescape, which CodeQL correctly flags.
 const NAMED_ENTITIES = {
-  amp: '&',
-  lt: '<',
-  gt: '>',
+  amp: "&",
+  lt: "<",
+  gt: ">",
   quot: '"',
   apos: "'",
 };
 
 function decodeXmlEntities(s) {
   return s.replace(/&(#x[0-9a-fA-F]+|#[0-9]+|[a-zA-Z]+);/g, (match, body) => {
-    if (body[0] === '#') {
-      const code = body[1] === 'x' || body[1] === 'X' ? parseInt(body.slice(2), 16) : parseInt(body.slice(1), 10);
+    if (body[0] === "#") {
+      const code = body[1] === "x" || body[1] === "X" ? parseInt(body.slice(2), 16) : parseInt(body.slice(1), 10);
       if (Number.isFinite(code) && code >= 0 && code <= 0x10ffff) {
         try {
           return String.fromCodePoint(code);
@@ -667,7 +667,7 @@ async function safeFetch(targetUrl, options) {
 }
 
 function appendParam(url, key, value) {
-  const separator = url.includes('?') ? '&' : '?';
+  const separator = url.includes("?") ? "&" : "?";
   return `${url}${separator}${key}=${encodeURIComponent(value)}`;
 }
 
@@ -675,25 +675,25 @@ function appendParam(url, key, value) {
 // server honours the first fmt= parameter it sees, so we must strip any existing
 // one before appending fmt=json3.
 function setFmtJson3(url) {
-  const stripped = url.replace(/[?&]fmt=[^&]*/g, '');
-  return appendParam(stripped, 'fmt', 'json3');
+  const stripped = url.replace(/[?&]fmt=[^&]*/g, "");
+  return appendParam(stripped, "fmt", "json3");
 }
 
 function json(body, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { 'Content-Type': 'application/json' },
+    headers: { "Content-Type": "application/json" },
   });
 }
 
 // --- UI ---
 
 function serveHTML(request, env) {
-  const user = request.headers.get('Cf-Access-Authenticated-User-Email') || '';
+  const user = request.headers.get("Cf-Access-Authenticated-User-Email") || "";
   const provider = getProvider(env).name;
-  const html = HTML.replace('__USER_EMAIL__', escapeHtml(user)).replace('__PROVIDER__', escapeHtml(provider));
+  const html = HTML.replace("__USER_EMAIL__", escapeHtml(user)).replace("__PROVIDER__", escapeHtml(provider));
   return new Response(html, {
-    headers: { 'Content-Type': 'text/html; charset=utf-8' },
+    headers: { "Content-Type": "text/html; charset=utf-8" },
   });
 }
 
@@ -702,11 +702,11 @@ function escapeHtml(s) {
     /[&<>"']/g,
     (c) =>
       ({
-        '&': '&amp;',
-        '<': '&lt;',
-        '>': '&gt;',
-        '"': '&quot;',
-        "'": '&#39;',
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        '"': "&quot;",
+        "'": "&#39;",
       })[c],
   );
 }
