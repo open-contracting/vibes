@@ -38,9 +38,17 @@ SORT_FIELDS = {
     "views": ("screenPageViews", False),
     "users": ("activeUsers", False),
     "events": ("eventCount", False),
+    "sessions": ("sessions", False),
 }
 
-METRICS = ["screenPageViews", "activeUsers", "eventCount"]
+# (API metric name, column label). Order defines both the column order and the
+# metric_values order in each row, so adding a metric here is the only edit needed.
+METRICS = [
+    ("screenPageViews", "Views"),
+    ("activeUsers", "Active users"),
+    ("eventCount", "Events"),
+    ("sessions", "Sessions"),
+]
 
 # Length of a dateHourMinute value: YYYYMMDDHHMM.
 MINUTE_STAMP_LENGTH = 12
@@ -61,6 +69,29 @@ def fmt_minute(raw: str) -> str:
     if len(raw) == MINUTE_STAMP_LENGTH and raw.isdigit():
         return f"{raw[0:4]}-{raw[4:6]}-{raw[6:8]} {raw[8:10]}:{raw[10:12]}"
     return raw
+
+
+def print_warnings(response, console) -> None:
+    """Surface data-quality signals the API reports, on by default."""
+    md = response.metadata
+    for s in md.sampling_metadatas:
+        space = int(s.sampling_space_size or 0)
+        read = int(s.samples_read_count or 0)
+        pct = (read / space * 100) if space else 0.0
+        console.print(
+            f"[yellow]\u26a0 Sampling applied[/yellow] — based on {read:,} of "
+            f"{space:,} events ({pct:.1f}%); figures are estimates."
+        )
+    if md.subject_to_thresholding:
+        console.print(
+            "[yellow]\u26a0 Thresholding applied[/yellow] — some rows withheld for "
+            "privacy (low user counts), so counts may be understated."
+        )
+    if md.data_loss_from_other_row:
+        console.print(
+            "[yellow]\u26a0 Cardinality data loss[/yellow] — some values were grouped "
+            "into (other); minute-level detail may be incomplete."
+        )
 
 
 def build_order_by(sort_by: str, *, descending: bool) -> OrderBy:
@@ -119,7 +150,7 @@ def main(property_id: str, sort_by: str, order: str, limit: int, months: int) ->
     request = RunReportRequest(
         property=f"properties/{property_id}",
         dimensions=[Dimension(name="dateHourMinute")],
-        metrics=[Metric(name=m) for m in METRICS],
+        metrics=[Metric(name=name) for name, _ in METRICS],
         date_ranges=[DateRange(start_date=start_date, end_date="yesterday")],
         order_bys=[build_order_by(sort_by, descending=descending)],
         metric_aggregations=[MetricAggregation.MAXIMUM],
@@ -133,14 +164,12 @@ def main(property_id: str, sort_by: str, order: str, limit: int, months: int) ->
         caption=f"{len(response.rows)} of {response.row_count} matching minutes shown",
     )
     table.add_column("Timestamp", style="cyan", no_wrap=True)
-    table.add_column("Views", justify="right")
-    table.add_column("Active users", justify="right")
-    table.add_column("Events", justify="right")
+    for _, label in METRICS:
+        table.add_column(label, justify="right")
 
     for row in response.rows:
         ts = fmt_minute(row.dimension_values[0].value)
-        views, users, events = (mv.value for mv in row.metric_values)
-        table.add_row(ts, views, users, events)
+        table.add_row(ts, *(mv.value for mv in row.metric_values))
 
     console.print(table)
 
@@ -148,10 +177,10 @@ def main(property_id: str, sort_by: str, order: str, limit: int, months: int) ->
     # result set (not just the returned rows), so it stays accurate under --limit.
     if response.maximums:
         peak = response.maximums[0].metric_values
-        console.print(
-            f"[bold]Peak values across range[/bold] — "
-            f"views: {peak[0].value}, active users: {peak[1].value}, events: {peak[2].value}"
-        )
+        parts = ", ".join(f"{label.lower()}: {mv.value}" for (_, label), mv in zip(METRICS, peak, strict=False))
+        console.print(f"[bold]Peak values across range[/bold] — {parts}")
+
+    print_warnings(response, console)
 
     if response.property_quota and response.property_quota.tokens_per_day.consumed:
         q = response.property_quota.tokens_per_day
