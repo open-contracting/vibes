@@ -1,4 +1,5 @@
-data/
-debug/
-suspects.*
-*.bak
+captcha/*.bak
+captcha/debug/
+captcha/suspects.*
+google-analytics/*.json
+onedrive-downloader/data/
