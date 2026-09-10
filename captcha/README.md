@@ -19,10 +19,10 @@ All ops go through `./manage.py`; the library API is `predict.py`.
 ```python
 from predict import predict, predict_with_confidence
 
-text = predict("samples/captcha_0001.png")          # "15u2A3"
-text = predict(png_bytes)                            # raw PNG bytes
-text = predict(base64_str)                           # base64 string, with or without "data:image/png;base64," prefix
-text = predict(pil_image)                            # PIL.Image
+text = predict("samples/captcha_0001.png")  # "15u2A3"
+text = predict(png_bytes)  # raw PNG bytes
+text = predict(base64_str)  # base64 string, with or without "data:image/png;base64," prefix
+text = predict(pil_image)  # PIL.Image
 
 text, conf = predict_with_confidence(image)
 # text  -> "15u2A3"
@@ -161,6 +161,7 @@ Supports two image protocols, auto-detected from your terminal:
 
 ```python
 import json, re, shutil
+
 labels = json.load(open("labels.json"))
 suspects = []
 with open("suspects.txt") as f:
@@ -170,11 +171,11 @@ with open("suspects.txt") as f:
             suspects.append((m.group(1), int(m.group(2)), m.group(3), m.group(4), float(m.group(5))))
 
 suspects.sort(key=lambda s: -s[4])
-TOP_N = 30                                              # tune this
+TOP_N = 30  # tune this
 for fname, pos, expected, predicted, _ in suspects[:TOP_N]:
     cur = labels[fname]
     if cur[pos] == expected:
-        labels[fname] = cur[:pos] + predicted + cur[pos+1:]
+        labels[fname] = cur[:pos] + predicted + cur[pos + 1 :]
 
 shutil.copy("labels.json", "labels.json.bak")
 json.dump(labels, open("labels.json", "w"), indent=2)
@@ -207,6 +208,7 @@ And evaluate against your labels:
 
 ```python
 import json, sys
+
 sys.path.insert(0, ".")
 from pathlib import Path
 from predict import predict
@@ -219,8 +221,8 @@ for fname, label in labels.items():
     correct_cap += int(pred == label)
     total += 1
 
-print(f"per-char: {correct_char}/{total*6} = {correct_char/(total*6):.1%}")
-print(f"per-captcha: {correct_cap}/{total} = {correct_cap/total:.1%}")
+print(f"per-char: {correct_char}/{total * 6} = {correct_char / (total * 6):.1%}")
+print(f"per-captcha: {correct_cap}/{total} = {correct_cap / total:.1%}")
 ```
 
 (These numbers are contaminated by training-set memorization. The honest accuracy comes from `./manage.py train`'s val output.)
