@@ -7,12 +7,12 @@ cffi==2.1.0
 charset-normalizer==3.4.9
     # via requests
 click==8.4.2
-    # via -r google-analytics/requirements.in
-cryptography==49.0.0
+    # via -r requirements.in
+cryptography==50.0.0
     # via google-auth
 google-analytics-data==0.23.0
-    # via -r google-analytics/requirements.in
-google-api-core==2.31.0
+    # via -r requirements.in
+google-api-core[grpc]==2.31.0
     # via google-analytics-data
 google-auth==2.56.0
     # via
@@ -57,7 +57,7 @@ pygments==2.20.0
 requests==2.34.2
     # via google-api-core
 rich==15.0.0
-    # via -r google-analytics/requirements.in
+    # via -r requirements.in
 typing-extensions==4.16.0
     # via grpcio
 urllib3==2.7.0
