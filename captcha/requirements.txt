@@ -82,7 +82,7 @@ requests==2.34.2
     # via -r requirements.in
 scipy==1.17.1
     # via -r requirements.in
-soupsieve==2.8.4
+soupsieve==2.9
     # via beautifulsoup4
 sympy==1.14.0
     # via torch
