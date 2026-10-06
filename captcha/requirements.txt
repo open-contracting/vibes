@@ -16,7 +16,7 @@ cuda-toolkit[cudart,cufft,cufile,cupti,curand,cusolver,cusparse,nvjitlink,nvrtc,
     # via torch
 filelock==3.29.0
     # via torch
-fsspec==2026.4.0
+fsspec==2026.6.0
     # via torch
 idna==3.17
     # via requests
