@@ -60,5 +60,5 @@ rich==15.0.0
     # via -r requirements.in
 typing-extensions==4.16.0
     # via grpcio
-urllib3==2.7.0
+urllib3==2.8.0
     # via requests
