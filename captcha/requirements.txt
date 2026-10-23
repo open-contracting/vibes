@@ -2,7 +2,7 @@
 #    uv pip compile captcha/requirements.in -o captcha/requirements.txt
 beautifulsoup4==4.14.3
     # via -r requirements.in
-certifi==2026.5.20
+certifi==2026.10.19
     # via requests
 charset-normalizer==3.4.7
     # via requests
