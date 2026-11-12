@@ -12,11 +12,11 @@ repos:
     hooks:
       - id: pip-compile
         name: pip-compile captcha/requirements.in
-        args: [captcha/requirements.in, -o, captcha/requirements.txt]
+        args: [--directory, captcha, requirements.in, -o, requirements.txt]
         files: ^captcha/requirements\.(in|txt)$
       - id: pip-compile
         name: pip-compile google-analytics/requirements.in
-        args: [google-analytics/requirements.in, -o, google-analytics/requirements.txt]
+        args: [--directory, google-analytics, requirements.in, -o, requirements.txt]
         files: ^google-analytics/requirements\.(in|txt)$
   - repo: https://github.com/biomejs/pre-commit
     rev: v2.5.15
