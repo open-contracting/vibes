@@ -7,3 +7,5 @@ jobs:
       contents: read
     with:
       ocds-noindent: true
+      # captcha/requirements.txt pins CPU-only torch.
+      pip-extra-index-url: https://download.pytorch.org/whl/cpu
