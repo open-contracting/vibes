@@ -22,3 +22,6 @@ extend-ignore-names = ["F"]  # torch.nn.functional as F
 
 [tool.ruff.lint.flake8-unused-arguments]
 ignore-variadic-names = true
+
+[tool.uv.pip]
+exclude-newer = "1 week"
