@@ -12,7 +12,7 @@ repos:
     hooks:
       - id: pip-compile
         name: pip-compile captcha/requirements.in
-        args: [--directory, captcha, requirements.in, -o, requirements.txt]
+        args: [--directory, captcha, --universal, --torch-backend, cpu, requirements.in, -o, requirements.txt]
         files: ^captcha/requirements\.(in|txt)$
       - id: pip-compile
         name: pip-compile google-analytics/requirements.in

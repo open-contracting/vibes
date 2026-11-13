@@ -9,7 +9,7 @@ Local virtualenv via `uv`:
 ```sh
 uv venv
 source .venv/bin/activate
-uv pip install -r requirements.txt
+uv pip install --torch-backend cpu -r requirements.txt
 ```
 
 All ops go through `./manage.py`; the library API is `predict.py`.
